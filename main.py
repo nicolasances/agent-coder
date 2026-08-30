@@ -1,8 +1,10 @@
 import subprocess
 
+from harness.claude import Claude
+
 def main() -> int: 
     
-    cmd = ["ls", "-l"]
+    cmd = Claude().build_command("Can you list the github repos for my user?")
     
     try: 
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
