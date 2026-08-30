@@ -11,6 +11,7 @@ def main() -> int:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         
         with proc.stdout as stdout:
+            
             for line in stdout:
                 
                 # The line is a json. Let's parse it.
