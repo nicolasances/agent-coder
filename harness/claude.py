@@ -15,7 +15,7 @@ class Claude(Harness):
             "-p", 
             prompt, 
             "--model", model,
-            # "--output-format", "stream-json",
+            "--output-format", "stream-json",
             "--verbose",
             "--permission-mode", permission_mode
         ]

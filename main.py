@@ -1,17 +1,29 @@
+import json
 import subprocess
 
 from harness.claude import Claude
 
 def main() -> int: 
     
-    cmd = Claude().build_command("Hello")
+    cmd = Claude().build_command("Describe what you think this repo is about", model="haiku")
     
     try: 
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         
-        print(result.stdout)
-        
-        return 0
+        with proc.stdout as stdout:
+            for line in stdout:
+                
+                # The line is a json. Let's parse it.
+                structured_output = json.loads(line) 
+
+                if structured_output.get("type") == "assistant": 
+                    if "message" in structured_output and "content" in structured_output.get("message") and structured_output.get("message"): 
+                        msg = structured_output.get("message").get("content")[0]
+                        
+                        if msg.get("type") in ["thinking", "text"]: 
+                            print(msg.get(msg.get("type")))
+                
+        return proc.wait()
     
     except subprocess.CalledProcessError as e:
         print(f"Command '{' '.join(cmd)}' failed with exit code {e.returncode}")
