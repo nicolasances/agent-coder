@@ -4,7 +4,7 @@ from harness.claude import Claude
 
 def main() -> int: 
     
-    cmd = Claude().build_command("Can you list the github repos for my user?")
+    cmd = Claude().build_command("Hello")
     
     try: 
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)

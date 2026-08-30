@@ -1,6 +1,9 @@
 
 
-class Claude: 
+from harness.harness import Harness
+
+
+class Claude(Harness): 
     
     def __init__(self): 
         pass 
