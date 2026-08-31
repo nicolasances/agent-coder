@@ -10,7 +10,7 @@ def main() -> int:
     try: 
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         
-        with proc.stdout as stdout:
+        with proc.stdout as stdout: # type: ignore
             
             for line in stdout:
                 

@@ -6,8 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # gcloud CLI, for object-store I/O only. 
-RUN curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=/opt \
-    && ln -s /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud
+#RUN curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=/opt \
+#    && ln -s /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud
 
 RUN npm install -g @anthropic-ai/claude-code
 
@@ -16,9 +16,9 @@ RUN useradd -m -u 1001 agent \
     && mkdir -p /workspace /task /out \
     && chown -R agent:agent /workspace /task /out
 
-WORKDIR /app
-COPY runner/ /app/runner/
-COPY schemas/ /app/schemas/
+# WORKDIR /app
+# COPY runner/ /app/runner/
+# COPY schemas/ /app/schemas/
 
 USER agent
 ENV PYTHONUNBUFFERED=1 \
