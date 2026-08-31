@@ -88,8 +88,7 @@ It should work in different contexts:
 
 ### 3.1 The run lifecycle
 
-The container performs a fixed sequence of phases. Naming them is the point: today
-`runner/main.py` implements none of them — it builds a command, streams output, and stops.
+The container performs a fixed sequence of phases. Naming them is the point: today `runner/main.py` implements none of them — it builds a command, streams output, and stops.
 
 ```
 resolve task
@@ -106,14 +105,14 @@ resolve task
 
 Every phase emits at least one Agent Event, so a stalled run is diagnosable to the phase.
 
-**Design decision — the runner owns the git operations, not the agent.** The alternative
-is to tell the agent, in its prompt, to commit and push and open a PR itself. That is
-tempting because it is less code. It is rejected for three reasons:
+**Design decision — the runner owns the git operations, not the agent.** The alternative is to tell the agent, in its prompt, to commit and push and open a PR itself. That is tempting because it is less code. It is rejected for three reasons:
 
 1. **Determinism.** Branch naming, commit trailers and PR body formatting become code
    with tests, not prose the model may reinterpret.
+
 2. **Credential blast radius.** If the runner performs the push, the push credential never
    needs to be reachable by the agent's shell. The agent edits files; it does not publish.
+
 3. **Failure attribution.** "The agent could not solve the task" and "the push was
    rejected" are different outcomes with different retry semantics. Merging them into one
    opaque agent turn destroys that distinction.
@@ -122,8 +121,7 @@ This remains an open question only in its details (see OQ-05), not in its direct
 
 ### 3.2 Two-tier execution
 
-The orchestrator was chosen as Temporal. That choice collides directly with the
-scale-to-zero constraint, and resolving the collision is what determines the architecture.
+The orchestrator was chosen as Temporal. 
 
 **The collision.** A Temporal worker *polls* a task queue. Temporal Cloud cannot push work
 to you; something must be awake to pull it. Polling means a process is always running.
