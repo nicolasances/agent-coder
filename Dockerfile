@@ -16,8 +16,8 @@ RUN useradd -m -u 1001 agent \
     && mkdir -p /workspace /task /out \
     && chown -R agent:agent /workspace /task /out
 
-# WORKDIR /app
-# COPY runner/ /app/runner/
+WORKDIR /app
+COPY runner/ /app/runner/
 # COPY schemas/ /app/schemas/
 
 USER agent

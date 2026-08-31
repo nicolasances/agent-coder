@@ -1,6 +1,6 @@
 
 
-from harness.harness import Harness
+from .harness import Harness
 
 
 class Claude(Harness): 

@@ -1,7 +1,7 @@
 import json
 import subprocess
 
-from harness.claude import Claude
+from .harness.claude import Claude
 
 def main() -> int: 
     
