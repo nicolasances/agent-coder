@@ -1,0 +1,67 @@
+name: Build and Deploy to Cloud Run Job
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+      - main
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: totoexperiments
+  REGION:  europe-west1
+  PACKAGE_NAME: 'agent-coder'
+  PACKAGE_VERSION: '0.1.0'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: totoexperiments
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.CICD_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCR
+        run: |
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{env.PACKAGE_NAME}}/${{ env.PACKAGE_NAME }}:${{ github.sha }} .
+          docker tag ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{env.PACKAGE_NAME}}/${{ env.PACKAGE_NAME }}:${{ github.sha }} \
+                     ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{env.PACKAGE_NAME}}/${{ env.PACKAGE_NAME }}:latest
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{env.PACKAGE_NAME}}/${{ env.PACKAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{env.PACKAGE_NAME}}/${{ env.PACKAGE_NAME }}:latest
+
+      - name: Deploy to Cloud Run Job
+        run: |
+          gcloud run jobs deploy ${{ env.PACKAGE_NAME }} \
+            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{env.PACKAGE_NAME}}/${{ env.PACKAGE_NAME }}:${{ github.sha }} \
+            --region=${{ env.REGION }} \
+            --max-retries=3 \
+            --task-timeout=300s \
+            --set-env-vars="NODE_ENV=production" \
+            --service-account=${{ env.PACKAGE_NAME}}@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
+
+      - name: Job deployment successful
+        run: |
+          echo "✅ Job deployed successfully!"
+          echo "Job Name: ${{ env.PACKAGE_NAME }}"
+          echo "Region: ${{ env.REGION }}"
+          echo "Image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{env.PACKAGE_NAME}}/${{ env.PACKAGE_NAME }}:${{ github.sha }}"
