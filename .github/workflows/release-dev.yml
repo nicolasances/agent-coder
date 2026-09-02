@@ -53,7 +53,8 @@ jobs:
         run: |
           gcloud run jobs deploy ${{ env.PACKAGE_NAME }} \
             --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{env.PACKAGE_NAME}}/${{ env.PACKAGE_NAME }}:${{ github.sha }} \
-            --region=${{ env.REGION }} \
+            --region=${{ env.REGION }} \ù
+            --max-retries=1 \ 
             --task-timeout=1800s \
             --service-account=${{ env.PACKAGE_NAME}}@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
 
