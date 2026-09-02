@@ -12,15 +12,10 @@ def main() -> int:
         oauth_token = get_claude_oauth_token()
 
     except Exception as e:
-        # Can't reach Secret Manager / no token -> infra failure, not a task
-        # failure (see docs/concept.md §4.5). No exit-code taxonomy wired up
-        # yet, so this is a plain non-zero for now.
         print(f"Failed to fetch Claude OAuth token from Secret Manager: {e}")
         return 30
 
-    # ANTHROPIC_API_KEY outranks CLAUDE_CODE_OAUTH_TOKEN in Claude Code's
-    # auth precedence. If it's set in the environment it will silently win,
-    # so guard against that rather than have the token be quietly ignored.
+    # ANTHROPIC_API_KEY outranks CLAUDE_CODE_OAUTH_TOKEN in Claude Code's auth precedence. If it's set in the environment it will silently win, so guard against that rather than have the token be quietly ignored.
     if os.environ.get("ANTHROPIC_API_KEY"):
         print("ANTHROPIC_API_KEY is set; it takes precedence over CLAUDE_CODE_OAUTH_TOKEN and must be unset to use the subscription token.")
         return 30
