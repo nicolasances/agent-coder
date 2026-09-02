@@ -33,4 +33,4 @@ def get_claude_oauth_token() -> str:
     if not project_id:
         raise RuntimeError("GCP_PID environment variable is not set")
 
-    return get_secret(project_id, "claude_token")
+    return get_secret(project_id, "claude-token")
