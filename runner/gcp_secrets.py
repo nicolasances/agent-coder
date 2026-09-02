@@ -22,15 +22,3 @@ def get_secret(project_id: str, secret_id: str, version_id: str = "latest") -> s
     return response.payload.data.decode("UTF-8")
 
 
-def get_claude_oauth_token() -> str:
-    """Fetch the Claude Code OAuth token from Secret Manager.
-
-    Project id comes from the GCP_PID env var; the secret is named
-    'claude_token'.
-    """
-
-    project_id = os.environ.get("GCP_PID")
-    if not project_id:
-        raise RuntimeError("GCP_PID environment variable is not set")
-
-    return get_secret(project_id, "claude-token")
