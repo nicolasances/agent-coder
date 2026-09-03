@@ -38,7 +38,7 @@ def main() -> int:
     task = resolve_task()
 
     # 3. Build and run the command
-    return harness.run_command(harness.build_command(task.prompt, model="haiku"))
+    return harness.run_command(harness.build_command(task.prompt, model="sonnet"))
 
 
 if __name__ == "__main__":
