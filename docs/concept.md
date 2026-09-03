@@ -84,8 +84,8 @@ It should work in different contexts:
 | **Agent Event** | One structured, versioned observation emitted during a run. The unit of observability. |
 | **Event Sink** | Where Agent Events are sent. A plugin: stdout, Temporal, HTTP, or nothing. |
 | **Run Result** | The structured summary a run emits on completion — status, branch, PR URL, skills SHA, token usage. |
-| **Task File** | The JSON object in GCS holding one `TaskSpec`. Written once by the dispatcher, immutable — the audit record of what was asked. |
-| **Result File** | The JSON object in GCS holding one `RunResult`. Written by the container at termination, keyed by `run_id` — the audit record of what happened. |
+| **Task File** | `task.json` in GCS, holding one `TaskSpec`. Written once by the dispatcher, immutable — the audit record of what was asked. |
+| **Result File** | `task-output.json` in GCS, holding one `RunResult`. Written by the container at termination — the audit record of what happened. |
 
 ---
 
@@ -342,6 +342,12 @@ resolved by the container from a single `TASK_ID` execution override (see
 [§4.4](#44-environment-variable-contract)). The dispatcher writes the Task File *before*
 triggering the execution, so `TASK_ID` always resolves once the container starts.
 
+**Layout (implemented 2026-09-03, `runner/main.py`):** the bucket holds one task per
+agent, not just per harness — `gs://{TASK_BUCKET}/{agent_name}/{task_id}/task.json`.
+`agent_name` is `agent-coder`, hardcoded (it names this repo, not a per-deployment
+choice), which is what makes the bucket shareable across other agents later without a
+naming collision.
+
 **(Revised 2026-09-03 — cut to four fields.)** `issue_ref`, `branch_name`, `skills_ref`,
 `harness`, `model`, `event_sink`, `event_sink_config` and `timeout_seconds` are all gone
 from this table. None were wrong in principle; each was configurability for a choice this
@@ -351,7 +357,7 @@ and [§9](#9-ideas-for-future-versions) for when each comes back.
 
 | Field | Type | Notes |
 |---|---|---|
-| `task_id` | string | Stable id from the orchestrator. Idempotency key, and must match the Task File's object name (`tasks/{task_id}.json`). |
+| `task_id` | string | Stable id from the orchestrator. Idempotency key, and must match the Task File's folder name (`agent-coder/{task_id}/task.json`). |
 | `repo_url` | string | HTTPS clone URL. |
 | `prompt` | string | The task, in the orchestrator's own words. May reference an issue, a doc, anything — no format is enforced. |
 | `base_branch` | string | Default `main`. |
@@ -391,12 +397,15 @@ run is underway. See [§3.1](#31-the-run-lifecycle) and OQ-11.
 
 ### 4.3 `RunResult` — the output
 
-Written to GCS as the **Result File** — `gs://{TASK_BUCKET}/results/{run_id}.json` — and
-emitted on the event stream at termination. `/out` is removed; see
-[Appendix A](#appendix-a--current-repo-state-vs-target). Keyed by `run_id`, not `task_id`,
-because a retried task produces a second execution and a second result: the Task File
-stays the single immutable record of what was asked, and each Result File records one
-attempt at answering it.
+Written to GCS as the **Result File** — `gs://{TASK_BUCKET}/agent-coder/{task_id}/task-output.json`,
+next to the Task File it answers — and emitted on the event stream at termination. `/out`
+is removed; see [Appendix A](#appendix-a--current-repo-state-vs-target). Not yet
+implemented — only the Task File read side exists so far (`runner/main.py`).
+
+**(Revised 2026-09-03 — keyed by `task_id`, not `run_id`.)** The earlier version of this
+section keyed the Result File by `run_id` specifically so a retried task wouldn't clobber
+its previous attempt's result. One file per task folder gives up that property: a retry
+overwrites `task-output.json`. Recorded honestly rather than re-argued away — see OQ-12.
 
 | Field | Type |
 |---|---|
@@ -432,13 +441,13 @@ almost none of them do.
 
 | Variable | Required | Notes |
 |---|---|---|
-| `TASK_ID` | yes | Names the Task File: `gs://{TASK_BUCKET}/tasks/{TASK_ID}.json`. The only thing that changes between runs. |
+| `TASK_ID` | yes | Names the Task File: `gs://{TASK_BUCKET}/agent-coder/{TASK_ID}/task.json`. The only thing that changes between runs. |
 
 **Deployment-level — set once per environment:**
 
 | Variable | Required | Notes |
 |---|---|---|
-| `TASK_BUCKET` | yes | GCS bucket holding Task Files and Result Files. |
+| `TASK_BUCKET` | yes | GCS bucket holding Task Files and Result Files, one folder per agent (`agent-coder/…`) — shared with other agents, not this repo's alone. |
 | `GITHUB_TOKEN` | yes | secret, injected at execution |
 | `ANTHROPIC_API_KEY` | yes | secret, injected at execution |
 | `ANTHROPIC_BASE_URL` | no | set when routing via an internal gateway |
@@ -584,6 +593,7 @@ live.
 | OQ-09 | IAM for the `TASK_BUCKET` — who reads/writes what? | Dispatcher: write `tasks/`, read `results/`. Container: read `tasks/`, write `results/`. A least-privilege split needs specifying before this ships. |
 | OQ-10 | Retention on Task Files and Result Files | Cheap and harmless at personal scale; needs a lifecycle policy before volume or compliance makes it not-harmless. Not urgent for v1. |
 | OQ-11 | How does the harness derive `branch_name`? | A deterministic slug of `prompt` (cheap, same input → same name always) vs. a small model call that summarises the task into a human-friendly name (nicer, non-deterministic, needs its own failure handling). Not yet decided. |
+| OQ-12 | Is overwriting `task-output.json` on retry acceptable? | Since 2026-09-03 the Result File is keyed by `task_id`, not `run_id` (§4.3), so a retried task loses its previous attempt's result unless something else preserves it. Candidates if it turns out to matter: a per-run object alongside it, GCS object versioning on the bucket, or accepting the loss since the event stream (§3.4) already carries a full trace per run. Not urgent until retries are actually implemented. |
 
 ---
 
@@ -669,14 +679,15 @@ document is actionable rather than aspirational.
 |---|---|---|
 | `runner/harness/harness.py` | `Harness` protocol has only `build_command()`. It abstracts *launching* a CLI but not *reading* one. | A `parse()` counterpart producing `AgentEvent`s (§3.4, §4.2). |
 | `runner/main.py:17-25` | Parses Claude Code's `stream-json` shape inline — `type == "assistant"`, `message.content[0]`, `thinking`/`text`. | Move into the Claude adapter. This is the leak `parse()` fixes; pointing the runner at another CLI today breaks it. |
-| `runner/main.py` | Hardcodes the prompt (`"Describe what you think this repo is about"`); implements none of the lifecycle in §3.1. | Read the `TaskSpec` from the Task File in GCS, resolved via `TASK_ID` (§4.1, §4.4); implement the lifecycle. |
+| `runner/main.py` | **Done (2026-09-03).** `resolve_task()` reads `TASK_ID`/`TASK_BUCKET`, fetches `agent-coder/{task_id}/task.json` via `runner/gcp_storage.py`, and builds the harness command from `task.prompt`. | Still missing: clone, branch, skills, commit, push, PR, `RunResult` — the rest of the lifecycle in §3.1. |
 | `runner/main.py` | Prints assistant text to stdout as prose. | Emit NDJSON `AgentEvent`s; add the `EventSink` seam. |
-| — | No `RunResult`, no exit code taxonomy. | §4.3 and §4.5. |
-| `runner/model/task.py` | `TaskSpec.from_json()` / `from_dict()` implemented — parses and validates `task_id`, `repo_url`, `prompt`, `base_branch` (§4.1). Does **not** fetch from GCS. | Wire `TASK_ID` + `TASK_BUCKET` resolution — a small `runner/gcp_storage.py` (mirroring `gcp_secrets.py`) that downloads the object and calls `TaskSpec.from_json()`. |
+| — | No `RunResult`, no exit code taxonomy, no `task-output.json` write. | §4.3 and §4.5. |
+| `runner/model/task.py` | **Done (2026-09-03).** `TaskSpec.from_json()` / `from_dict()` parse and validate `task_id`, `repo_url`, `prompt`, `base_branch` (§4.1). | — |
+| `runner/gcp_storage.py` | **Done (2026-09-03).** `get_object(bucket, object_name)`, mirroring `gcp_secrets.py`. Read-only — no `put_object` yet. | Add write support when `RunResult` needs to reach `task-output.json`. |
 | `Dockerfile` | Creates `/workspace /task /out`. | `/workspace` stays. `/task` and `/out` are both removed: `/out` per OQ-08 (resolved — `RunResult` goes to GCS); `/task` was already unused and stays unused now that the Task File is resolved from GCS, not a mounted path. |
 | `Dockerfile` | Commented-out `gcloud` install. | Remove the commented CLI install — GCS access is via the `google-cloud-storage` Python client, not the `gcloud` CLI (see §8). |
 | `Dockerfile` | No `gh` CLI. | Needed for the lifecycle in §3.1. A Skill Pack fetch step is **not** needed for v1 — skills are baked into the image (§3.5). |
-| `requirements.txt` | Only `google-cloud-secret-manager`. | Add `google-cloud-storage`. |
+| `requirements.txt` | **Done (2026-09-03).** `google-cloud-storage` added alongside `google-cloud-secret-manager`. | — |
 
 What is already right and should not be disturbed: the non-root `agent` user, the absence
 of any credential in the image, the `Harness` protocol as a concept, and
