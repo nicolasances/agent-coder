@@ -2,16 +2,11 @@
 
 import json
 
-from runner.config.runner import RunnerConfig
-
 from .harness import Harness
 
 
 class Claude(Harness): 
     
-    def __init__(self, runner_config: RunnerConfig): 
-        super().__init__(runner_config)
-
     def get_secrets_names(self) -> list[str]: 
         return [
             "claude-token", # The name of the secret in GCP Secret Manager that contains the Claude Code OAuth token.

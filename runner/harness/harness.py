@@ -1,12 +1,14 @@
 from abc import ABC, abstractmethod
 import os
 import subprocess
-from runner.config.runner import RunnerConfig
 
 class Harness(ABC): 
 
-    def __init__(self, runner_config: RunnerConfig): 
-        self.secrets = runner_config.secrets
+    def __init__(self): 
+        pass
+
+    def set_secrets(self, secrets: dict): 
+        self.secrets = secrets
 
     @abstractmethod
     def get_secrets_names(self) -> list[str]:
@@ -33,8 +35,11 @@ class Harness(ABC):
         """
         ...
 
-    def run_command(self, command: list[str]): 
+    def run_command(self, command: list[str]) -> int: 
         """Run the command in a subprocess and stream the output to stdout."""
+
+        if not hasattr(self, 'secrets'):
+            raise ValueError("Secrets have not been set. Please call set_secrets() before running the command.")
 
         env = {**os.environ, **self.build_env(self.secrets)}
 

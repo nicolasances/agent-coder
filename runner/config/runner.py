@@ -37,5 +37,8 @@ class RunnerConfig:
 
         # 2. Load secrets from environment variables
 
+        # 3. Inject secrets in harness
+        harness.set_secrets(secrets)
+
         # Return 
         return RunnerConfig(secrets=secrets)
