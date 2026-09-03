@@ -31,6 +31,8 @@ class RunnerConfig:
                 secret_value = get_secret(project_id, secret_name)  # type: ignore
                 secrets[secret_name] = secret_value
 
+                print(f"Loaded secret '{secret_name}' from GCP Secret Manager.")
+
             except Exception as e:
                 print(f"Failed to fetch secret '{secret_name}' from GCP Secret Manager: {e}")
                 raise e
