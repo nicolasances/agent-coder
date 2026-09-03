@@ -1,7 +1,8 @@
 # Coding Agent — Concept
 
 > Status: concept / decision document. Nothing here is implemented yet.
-> Last revised: 2026-08-31.
+> Last revised: 2026-09-03. Task input/output moved from environment variables to
+> GCS-backed JSON files — see §3.3, §4.4, §6.1, §8.
 
 ## Table of Contents
 
@@ -81,6 +82,8 @@ It should work in different contexts:
 | **Agent Event** | One structured, versioned observation emitted during a run. The unit of observability. |
 | **Event Sink** | Where Agent Events are sent. A plugin: stdout, Temporal, HTTP, or nothing. |
 | **Run Result** | The structured summary a run emits on completion — status, branch, PR URL, skills SHA, token usage. |
+| **Task File** | The JSON object in GCS holding one `TaskSpec`. Written once by the dispatcher, immutable — the audit record of what was asked. |
+| **Result File** | The JSON object in GCS holding one `RunResult`. Written by the container at termination, keyed by `run_id` — the audit record of what happened. |
 
 ---
 
@@ -187,20 +190,27 @@ buys nothing.
 
 What the container needs from any platform is short enough to enumerate:
 
-1. Outbound network — to GitHub, and to the model endpoint.
+1. Outbound network — to GitHub, to the model endpoint, and to GCS.
 2. An ephemeral writable disk for `/workspace`.
 3. Secrets injected as environment variables at execution time.
+4. Read/write access to one GCS bucket, for the Task File and the Result File.
 
-That is the entire list. No volumes, no PVCs, no object store, no service mesh, no
-ingress. This is a direct consequence of choosing git as the only I/O channel, and it is
-why the choice between Cloud Run Jobs and Kubernetes Jobs is nearly a non-decision — both
-provide all three without effort.
+That is the entire list. No volumes, no PVCs, no service mesh, no ingress. **Git remains
+the only I/O channel for code** — clone in, PR out; nothing about that changed. GCS carries
+a different thing: the *task record*, not code — what was asked (input) and what happened
+(result), each written once, keyed by `task_id` and `run_id` respectively. Neither object
+is ever updated in place by more than one writer, so this does not reintroduce shared
+mutable state between runs — it is an audit trail, not a database. *(Revised 2026-09-03 —
+see [§6.1](#61-constraints) and [§8](#8-not-doing-and-why) for the earlier, now-superseded,
+git-only-I/O constraint this replaces.)* The choice between Cloud Run Jobs and Kubernetes
+Jobs remains close to a non-decision — both read and write a GCS object with no more
+effort than they read an env var.
 
 The portable interface is therefore three things, all specified in [§4](#4-data-models):
 
-- the **environment variable contract** (input),
+- a single **`TASK_ID` execution override, resolved against GCS** (input),
 - the **exit code taxonomy** (outcome),
-- the **stdout NDJSON event stream** (observation).
+- the **stdout NDJSON event stream, plus the GCS Result File** (observation).
 
 Anything that cannot be expressed in those three is environment-specific and belongs in
 the orchestrator, not here.
@@ -304,12 +314,14 @@ keep beat three that anticipate a future that may not arrive.
 
 ### 4.1 `TaskSpec` — the input
 
-Supplied by the orchestrator, delivered as environment variables (see
-[§4.4](#44-environment-variable-contract)).
+Supplied by the orchestrator as a JSON object written to GCS — the **Task File** — and
+resolved by the container from a single `TASK_ID` execution override (see
+[§4.4](#44-environment-variable-contract)). The dispatcher writes the Task File *before*
+triggering the execution, so `TASK_ID` always resolves once the container starts.
 
 | Field | Type | Notes |
 |---|---|---|
-| `task_id` | string | Stable id from the orchestrator. Idempotency key. |
+| `task_id` | string | Stable id from the orchestrator. Idempotency key, and must match the Task File's object name (`tasks/{task_id}.json`). |
 | `repo_url` | string | HTTPS clone URL. |
 | `issue_ref` | string \| null | e.g. `owner/repo#123`. Null for a free-form task. |
 | `prompt` | string \| null | Free-form task text. One of `issue_ref` or `prompt` is required. |
@@ -353,7 +365,12 @@ Supplied by the orchestrator, delivered as environment variables (see
 
 ### 4.3 `RunResult` — the output
 
-Written to `/out/result.json` and emitted on the event stream at termination.
+Written to GCS as the **Result File** — `gs://{TASK_BUCKET}/results/{run_id}.json` — and
+emitted on the event stream at termination. `/out` is removed; see
+[Appendix A](#appendix-a--current-repo-state-vs-target). Keyed by `run_id`, not `task_id`,
+because a retried task produces a second execution and a second result: the Task File
+stays the single immutable record of what was asked, and each Result File records one
+attempt at answering it.
 
 | Field | Type |
 |---|---|
@@ -375,29 +392,52 @@ can be re-created exactly from those three values.
 
 ### 4.4 Environment variable contract
 
-This table *is* the portable input surface. Anything not here is not an input.
+**(Revised 2026-09-03.)** Per-task fields no longer travel as individual environment
+variables — they live in the Task File ([§4.1](#41-taskspec--the-input)), a JSON object in
+GCS. What crosses the environment-variable boundary now splits into two kinds, and the
+distinction is the point: **deployment-level** variables are set once, when the Cloud Run
+Job resource itself is configured, and are identical for every execution; **per-execution**
+variables are set by the dispatcher's run-with-overrides call, and are what actually varies
+from task to task. Collapsing that distinction was the flaw in the previous version of this
+table — it made every field look like it needed a fresh decision on every dispatch, when
+almost none of them do.
+
+**Per-execution override — one variable:**
 
 | Variable | Required | Notes |
 |---|---|---|
-| `TASK_ID` | yes | |
-| `REPO_URL` | yes | |
-| `ISSUE_REF` | one of | |
-| `TASK_PROMPT` | one of | |
-| `BASE_BRANCH` | no | default `main` |
-| `BRANCH_NAME` | yes | |
+| `TASK_ID` | yes | Names the Task File: `gs://{TASK_BUCKET}/tasks/{TASK_ID}.json`. The only thing that changes between runs. |
+
+**Deployment-level — set once per environment:**
+
+| Variable | Required | Notes |
+|---|---|---|
+| `TASK_BUCKET` | yes | GCS bucket holding Task Files and Result Files. |
 | `SKILLS_REPO_URL` | yes | |
-| `SKILLS_REF` | yes | no default — an unset ref must fail loudly, never silently mean `latest` |
-| `HARNESS` | no | default `claude` |
-| `MODEL` | no | |
-| `EVENT_SINK` | no | default `stdout` |
-| `EVENT_SINK_CONFIG` | conditional | JSON; e.g. Temporal task token, or HTTP endpoint |
-| `TIMEOUT_SECONDS` | no | |
 | `GITHUB_TOKEN` | yes | secret, injected at execution |
 | `ANTHROPIC_API_KEY` | yes | secret, injected at execution |
 | `ANTHROPIC_BASE_URL` | no | set when routing via an internal gateway |
 
-No credential is ever baked into the image. This is already true of the current Dockerfile
-and must stay true.
+**Task File fields (in GCS, not the environment):**
+
+| Field | Required | Notes |
+|---|---|---|
+| `task_id` | yes | Must match the object name. Idempotency key. |
+| `repo_url` | yes | |
+| `issue_ref` | one of | |
+| `prompt` | one of | |
+| `base_branch` | no | default `main` |
+| `branch_name` | yes | Computed by the dispatcher so it's recorded before the run starts. |
+| `skills_ref` | yes | no default — an unset ref must fail loudly, never silently mean `latest` |
+| `harness` | no | default `claude` |
+| `model` | no | |
+| `event_sink` | no | default `stdout` |
+| `event_sink_config` | conditional | JSON; e.g. Temporal task token, or HTTP endpoint |
+| `timeout_seconds` | no | |
+
+No credential is ever baked into the image, and no credential is ever written into a Task
+File — secrets stay exclusively in environment variables injected from Secret Manager at
+execution time. This is already true of the current Dockerfile and must stay true.
 
 ### 4.5 Exit code taxonomy
 
@@ -443,8 +483,15 @@ prevent. They demand opposite responses.
   (OQ-01).
 - **Contract-level portability.** Same env vars, same exit codes, same event stream.
   *Not* the same image bytes — two builds from two pipelines is expected.
-- **Git-only I/O.** Clone in, push out. No volumes, no object store. This constraint is
-  what makes the runtime decision cheap; loosening it would be expensive.
+- **Git-only I/O for code.** Clone in, push out — no volumes, no shared mutable state
+  between runs. *(Revised 2026-09-03 — no longer "no object store.")* GCS now carries the
+  Task File and Result File as write-once, immutable objects keyed by `task_id` / `run_id`;
+  see [§3.3](#33-portability-as-a-contract-not-as-an-artifact),
+  [§4.4](#44-environment-variable-contract), [§8](#8-not-doing-and-why). That is a
+  deliberately narrow exception: one object-store dependency, used only for append-only
+  audit records, never for code or workspace state. It still keeps the runtime decision
+  cheap — both Cloud Run Jobs and Kubernetes Jobs read and write a GCS object with no more
+  effort than they read an env var.
 - **GitHub cloud on both sides.** Confirmed. One code path.
 - **DR platform conventions.** Whatever the platform requires for deployment to GKE.
   Currently unread — see [§6.3](#63-a-note-on-the-dr-platform-docs).
@@ -513,7 +560,9 @@ live.
 | OQ-05 | Does the runner own git operations, or the agent? | Direction is decided (runner — §3.1). Open in its details: branch naming scheme, commit trailers, PR body template, and what happens when the agent leaves the tree dirty in an unexpected way. |
 | OQ-06 | Where does the Skill Pack live? | Same repo (simple, couples skill releases to harness releases), separate repo (independent versioning, needs its own credential), or a released artifact. Affects `SKILLS_REPO_URL` and the DR egress question. |
 | OQ-07 | Cloud Run Jobs maximum task timeout | **Verify against current GCP documentation rather than assuming.** Determines whether long tasks need chunking. |
-| OQ-08 | What does `/out` carry, and does it survive? | Candidate: the `RunResult`. On Cloud Run Jobs and K8s Jobs the filesystem dies with the container, so `/out` is only useful if something reads it before exit — which may mean the event stream is the real result channel and `/out` is redundant. |
+| OQ-08 | What does `/out` carry, and does it survive? | **Resolved 2026-09-03.** Nothing — `/out` is removed. `RunResult` is written to GCS (`results/{run_id}.json`, §4.3) instead, which survives the container by construction. |
+| OQ-09 | IAM for the `TASK_BUCKET` — who reads/writes what? | Dispatcher: write `tasks/`, read `results/`. Container: read `tasks/`, write `results/`. A least-privilege split needs specifying before this ships. |
+| OQ-10 | Retention on Task Files and Result Files | Cheap and harmless at personal scale; needs a lifecycle policy before volume or compliance makes it not-harmless. Not urgent for v1. |
 
 ---
 
@@ -529,8 +578,19 @@ live.
   zero at home.** If DR ever diverges, or if A-02 proves false, this is the design to
   reach for there. Recorded here so that reasoning is not lost.
 - **A git-host adapter** — unnecessary. GitHub cloud on both sides (§3.6).
-- **Object-store I/O** — superseded by git-only. The commented-out `gcloud` install in the
-  Dockerfile is a fossil of this earlier model and should go.
+- ~~**Object-store I/O**~~ — **reversed 2026-09-03.** GCS now carries the Task File and
+  Result File ([§3.3](#33-portability-as-a-contract-not-as-an-artifact),
+  [§4.4](#44-environment-variable-contract), [§6.1](#61-constraints)). What's still
+  rejected: object storage for *code* or workspace state — that stays git-only. The
+  commented-out `gcloud` **CLI** install in the Dockerfile is still a fossil and should
+  still go, but for a different reason now: GCS access is via the `google-cloud-storage`
+  Python client (same pattern as `google-cloud-secret-manager` in `gcp_secrets.py`), not
+  the `gcloud` CLI.
+- **A database-backed task store (Firestore, etc.)** — considered as the reference-based
+  alternative to a Task File. Rejected: it would add a second stateful dependency next to
+  GCS rather than reusing the one the audit requirement already justifies, and a document
+  that two writers (dispatcher, container) mutate over a run's lifetime is a weaker audit
+  record than an object that's written once and never touched again.
 - **Baked-in skills as the default** — kept as a documented fallback (§3.5), not the
   primary path.
 - **Unpinned `latest` skills** — rejected outright. Non-reproducible and unreviewable.
@@ -570,12 +630,14 @@ document is actionable rather than aspirational.
 |---|---|---|
 | `runner/harness/harness.py` | `Harness` protocol has only `build_command()`. It abstracts *launching* a CLI but not *reading* one. | A `parse()` counterpart producing `AgentEvent`s (§3.4, §4.2). |
 | `runner/main.py:17-25` | Parses Claude Code's `stream-json` shape inline — `type == "assistant"`, `message.content[0]`, `thinking`/`text`. | Move into the Claude adapter. This is the leak `parse()` fixes; pointing the runner at another CLI today breaks it. |
-| `runner/main.py` | Hardcodes the prompt (`"Describe what you think this repo is about"`); implements none of the lifecycle in §3.1. | Read a `TaskSpec` from the environment; implement the lifecycle. |
+| `runner/main.py` | Hardcodes the prompt (`"Describe what you think this repo is about"`); implements none of the lifecycle in §3.1. | Read the `TaskSpec` from the Task File in GCS, resolved via `TASK_ID` (§4.1, §4.4); implement the lifecycle. |
 | `runner/main.py` | Prints assistant text to stdout as prose. | Emit NDJSON `AgentEvent`s; add the `EventSink` seam. |
 | — | No `RunResult`, no exit code taxonomy. | §4.3 and §4.5. |
-| `Dockerfile` | Creates `/workspace /task /out`. | `/workspace` stays. `/task` appears unused under the env-var contract. `/out` needs a decided purpose or removal (OQ-08). |
-| `Dockerfile` | Commented-out `gcloud` install. | Remove — dead under git-only I/O. |
+| `runner/model/task.py` | `Task.from_json()` / `CodingTask.from_json()` read a **local JSON file by path**. | Resolve the Task File from GCS via `TASK_ID` + `TASK_BUCKET` (§4.1, §4.4), not a local path. `from_json()`'s parsing logic can stay — only its input source changes, from a file handle to downloaded object bytes. |
+| `Dockerfile` | Creates `/workspace /task /out`. | `/workspace` stays. `/task` and `/out` are both removed: `/out` per OQ-08 (resolved — `RunResult` goes to GCS); `/task` was already unused and stays unused now that the Task File is resolved from GCS, not a mounted path. |
+| `Dockerfile` | Commented-out `gcloud` install. | Remove the commented CLI install — GCS access is via the `google-cloud-storage` Python client, not the `gcloud` CLI (see §8). |
 | `Dockerfile` | No `gh` CLI, no Skill Pack fetch step. | Both needed for the lifecycle in §3.1. |
+| `requirements.txt` | Only `google-cloud-secret-manager`. | Add `google-cloud-storage`. |
 
 What is already right and should not be disturbed: the non-root `agent` user, the absence
 of any credential in the image, the `Harness` protocol as a concept, and
