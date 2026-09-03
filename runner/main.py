@@ -12,17 +12,23 @@ from .harness.claude import Claude
 AGENT_NAME = "coder"
 
 
+def task_bucket() -> str:
+    return f"{os.environ.get('GCP_PID')}-agents-data"
+
+
+def task_object_path(task_id: str, filename: str) -> str:
+    return f"{AGENT_NAME}/{task_id}/{filename}"
+
+
 def resolve_task() -> TaskSpec:
     """Resolve the TaskSpec for this run from its Task File in GCS."""
 
-    bucket = f"{os.environ.get("GCP_PID")}-agents-data"
     task_id = os.environ.get("TASK_ID")
 
     if not task_id:
         raise ValueError("TASK_ID is not set.")
 
-    object_name = f"{AGENT_NAME}/{task_id}/task.json"
-    task_json = get_object(bucket, object_name)
+    task_json = get_object(task_bucket(), task_object_path(task_id, "task.json"))
 
     return TaskSpec.from_json(task_json)
 
@@ -37,8 +43,12 @@ def main() -> int:
     # 2. Resolve the task from its Task File in GCS
     task = resolve_task()
 
-    # 3. Build and run the command
-    return harness.run_command(harness.build_command(task.prompt, model="sonnet"))
+    # 3. Build and run the command, tracing every stdout line to GCS
+    return harness.run_command(
+        harness.build_command(task.prompt, model="sonnet"),
+        trace_bucket=task_bucket(),
+        trace_object=task_object_path(task.task_id, "trace.json"),
+    )
 
 
 if __name__ == "__main__":

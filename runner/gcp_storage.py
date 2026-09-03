@@ -16,3 +16,13 @@ def get_object(bucket_name: str, object_name: str) -> str:
     blob = bucket.blob(object_name)
 
     return blob.download_as_text()
+
+
+def put_object(bucket_name: str, object_name: str, content: str, content_type: str = "application/json") -> None:
+    """Upload text content to a GCS object, overwriting any existing object at that name."""
+
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(object_name)
+
+    blob.upload_from_string(content, content_type=content_type)

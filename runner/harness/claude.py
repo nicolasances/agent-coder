@@ -13,8 +13,12 @@ class Claude(Harness):
         ]
 
     def get_llm_message(self, stdout_line: str) -> str:
-        # The line is a json. Let's parse it.
-        structured_output = json.loads(stdout_line)
+        # The line is usually json, but not guaranteed — a stray warning or a
+        # line truncated by process exit shouldn't take the whole run down.
+        try:
+            structured_output = json.loads(stdout_line)
+        except json.JSONDecodeError:
+            return ""
 
         if structured_output.get("type") != "assistant":
             return ""

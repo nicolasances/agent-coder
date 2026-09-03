@@ -1,8 +1,11 @@
 from abc import ABC, abstractmethod
+import json
 import os
 import subprocess
 
-class Harness(ABC): 
+from runner.gcp_storage import put_object
+
+class Harness(ABC):
 
     def __init__(self): 
         pass
@@ -35,28 +38,63 @@ class Harness(ABC):
         """
         ...
 
-    def run_command(self, command: list[str]) -> int: 
-        """Run the command in a subprocess and stream the output to stdout."""
+    def run_command(self, command: list[str], trace_bucket: str | None = None, trace_object: str | None = None) -> int:
+        """Run the command in a subprocess, streaming output to stdout and
+        collecting every raw stdout line into a trace.
+
+        If trace_bucket and trace_object are given, the trace is uploaded to
+        GCS as a JSON array once the process exits. Writing the trace is
+        best-effort: a failure to write it is logged but never changes the
+        run's exit code — losing the trace is not the same kind of failure as
+        losing the actual work.
+        """
 
         if not hasattr(self, 'secrets'):
             raise ValueError("Secrets have not been set. Please call set_secrets() before running the command.")
 
         env = {**os.environ, **self.build_env(self.secrets)}
+        trace: list = []
 
         try:
             proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-            
+
             with proc.stdout as stdout: # type: ignore
 
                 for line in stdout:
+                    trace.append(self._trace_entry(line))
+
                     msg = self.get_llm_message(line)
                     if msg:
                         print(msg, flush=True)
 
+            exit_code = proc.wait()
 
-            return proc.wait()
-        
         except subprocess.CalledProcessError as e:
             print(f"Command '{' '.join(command)}' failed with exit code {e.returncode}")
             print(f"Error output: {e.stderr}")
-            return e.returncode
+            exit_code = e.returncode
+
+        self._write_trace(trace, trace_bucket, trace_object)
+
+        return exit_code
+
+    @staticmethod
+    def _trace_entry(stdout_line: str) -> dict:
+        """Parse one raw stdout line for the trace, without ever losing it."""
+
+        stripped = stdout_line.rstrip("\n")
+
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            return {"raw": stripped}
+
+    @staticmethod
+    def _write_trace(trace: list, bucket: str | None, object_name: str | None) -> None:
+        if not bucket or not object_name:
+            return
+
+        try:
+            put_object(bucket, object_name, json.dumps(trace))
+        except Exception as e:
+            print(f"Failed to write trace to gs://{bucket}/{object_name}: {e}")
