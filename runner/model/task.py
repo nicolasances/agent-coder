@@ -43,10 +43,10 @@ class TaskSpec:
             raise ValueError(f"The Task File is missing required field(s): {', '.join(missing)}.")
 
         return TaskSpec(
-            task_id=task_details["task_id"],
-            repo_url=task_details["repo_url"],
+            task_id=task_details["taskId"],
+            repo_url=task_details["repoURL"],
             prompt=task_details["prompt"],
-            base_branch=task_details.get("base_branch", "main"),
+            base_branch=task_details.get("baseBranch", "main"),
         )
 
     @staticmethod

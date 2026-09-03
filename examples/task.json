@@ -1,0 +1,6 @@
+{
+    "taskId": "test-task-001", 
+    "repoURL": "https://github.com/nicolasances/tome.git", 
+    "prompt": "Describe in one sentence what this repo is about.", 
+    "baseBranch": "main",
+}
