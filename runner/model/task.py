@@ -36,7 +36,7 @@ class TaskSpec:
     def from_dict(task_details: dict) -> "TaskSpec":
         """Build a TaskSpec from an already-parsed Task File (docs/concept.md §4.1, §4.4)."""
 
-        required = ["task_id", "repo_url", "prompt"]
+        required = ["taskId", "prompt"]
         missing = [field for field in required if not task_details.get(field)]
 
         if missing:
