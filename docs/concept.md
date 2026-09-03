@@ -2,7 +2,9 @@
 
 > Status: concept / decision document. Nothing here is implemented yet.
 > Last revised: 2026-09-03. Task input/output moved from environment variables to
-> GCS-backed JSON files — see §3.3, §4.4, §6.1, §8.
+> GCS-backed JSON files (§3.3, §4.4, §6.1, §8); `TaskSpec` cut to four fields, with
+> skills, harness, model, event sink and per-task timeout deferred rather than built
+> (§3.5, §3.6, §4.1, §4.4, §8, §9).
 
 ## Table of Contents
 
@@ -119,6 +121,13 @@ Every phase emits at least one Agent Event, so a stalled run is diagnosable to t
 3. **Failure attribution.** "The agent could not solve the task" and "the push was
    rejected" are different outcomes with different retry semantics. Merging them into one
    opaque agent turn destroys that distinction.
+
+**Branch naming, specifically (revised 2026-09-03):** the dispatcher no longer supplies
+`branch_name` — see [§4.1](#41-taskspec--the-input). The harness derives it itself from the
+task's `prompt`, once the container has it. That still satisfies the determinism argument
+above only if the derivation is itself deterministic code, not a free-form model turn;
+whether it's a plain slug of the prompt or a small, separately-controlled summarisation
+call is open — see OQ-11.
 
 This remains an open question only in its details (see OQ-05), not in its direction.
 
@@ -264,7 +273,8 @@ The Skill Pack tells the agent *how* to work. Three ways to get it into a run:
 | Home and DR can differ | Only by rebuilding | No | Yes, via config |
 | Change is reviewable | Yes (image build) | **No** | Yes (release) |
 
-**Decision: pinned ref, resolved by the orchestrator.**
+**Decision: pinned ref, resolved by the orchestrator.** *(Deferred for v1 — see the note at
+the end of this section. The reasoning below stays valid for when this comes back.)*
 
 The case against `latest` is not convenience, it is forensics and safety:
 
@@ -290,6 +300,15 @@ contract, different config*, which is exactly the principle in [§3.3](#33-porta
 pack into the image is the documented retreat. It is more rigid, not wrong. What is
 rejected outright is fetching an unpinned `latest`.
 
+**v1 (revised 2026-09-03): the fallback is the starting point.** Skills are baked into the
+image — the "Baked into image" column above, not "Pinned ref at startup." There is no
+Skill Pack repo yet, and no second environment yet to justify runtime selection.
+`skills_ref` is removed from the Task File accordingly ([§4.1](#41-taskspec--the-input),
+[§4.4](#44-environment-variable-contract)); `SKILLS_REPO_URL` is removed too, since there
+is nothing to fetch. This is a deferral, not a reversal of the argument above: the day a
+real Skill Pack exists and needs to roll back independently of the image, the pinned-ref
+design in this section is what to build, unchanged.
+
 ### 3.6 Extension seams
 
 Exactly two, for v1:
@@ -298,6 +317,10 @@ Exactly two, for v1:
 |---|---|---|
 | `Harness` | Which agent CLI | Claude Code (v1). Codex, Gemini CLI later. |
 | `EventSink` | Where events go | `stdout` (always), `temporal`, `http`, `none`. |
+
+**v1 note (2026-09-03):** only the `stdout` `EventSink` exists in code. The seam stays
+named here because it costs nothing to leave open, but nothing in the Task File selects a
+sink — see [§4.1](#41-taskspec--the-input), [§8](#8-not-doing-and-why).
 
 **There is deliberately no git-host seam.** Both setups are GitHub cloud, so clone,
 branch, push and PR are one code path with no abstraction over them. If DR ever moves to
@@ -319,19 +342,22 @@ resolved by the container from a single `TASK_ID` execution override (see
 [§4.4](#44-environment-variable-contract)). The dispatcher writes the Task File *before*
 triggering the execution, so `TASK_ID` always resolves once the container starts.
 
+**(Revised 2026-09-03 — cut to four fields.)** `issue_ref`, `branch_name`, `skills_ref`,
+`harness`, `model`, `event_sink`, `event_sink_config` and `timeout_seconds` are all gone
+from this table. None were wrong in principle; each was configurability for a choice this
+project doesn't have to make yet — one harness, one model, one sink, no separate issue
+format, no Skill Pack repo. See [§8](#8-not-doing-and-why) for the field-by-field reasoning
+and [§9](#9-ideas-for-future-versions) for when each comes back.
+
 | Field | Type | Notes |
 |---|---|---|
 | `task_id` | string | Stable id from the orchestrator. Idempotency key, and must match the Task File's object name (`tasks/{task_id}.json`). |
 | `repo_url` | string | HTTPS clone URL. |
-| `issue_ref` | string \| null | e.g. `owner/repo#123`. Null for a free-form task. |
-| `prompt` | string \| null | Free-form task text. One of `issue_ref` or `prompt` is required. |
+| `prompt` | string | The task, in the orchestrator's own words. May reference an issue, a doc, anything — no format is enforced. |
 | `base_branch` | string | Default `main`. |
-| `branch_name` | string | Computed by the orchestrator so it is recorded before the run starts. |
-| `skills_ref` | string | Tag, branch or SHA. |
-| `harness` | enum | `claude` for v1. |
-| `model` | string | Passed through to the CLI. |
-| `event_sink` | enum | `stdout` \| `temporal` \| `http` \| `none`. |
-| `timeout_seconds` | int | Runner self-terminates; a belt-and-braces backstop to the platform's own timeout. |
+
+`branch_name` is no longer supplied here — the harness derives it from `prompt` once the
+run is underway. See [§3.1](#31-the-run-lifecycle) and OQ-11.
 
 ### 4.2 `AgentEvent`
 
@@ -413,10 +439,12 @@ almost none of them do.
 | Variable | Required | Notes |
 |---|---|---|
 | `TASK_BUCKET` | yes | GCS bucket holding Task Files and Result Files. |
-| `SKILLS_REPO_URL` | yes | |
 | `GITHUB_TOKEN` | yes | secret, injected at execution |
 | `ANTHROPIC_API_KEY` | yes | secret, injected at execution |
 | `ANTHROPIC_BASE_URL` | no | set when routing via an internal gateway |
+
+`SKILLS_REPO_URL` is removed *(2026-09-03)* — v1 bakes skills into the image, so there is
+nothing to fetch. See [§3.5](#35-skills--pinned-not-latest).
 
 **Task File fields (in GCS, not the environment):**
 
@@ -424,16 +452,8 @@ almost none of them do.
 |---|---|---|
 | `task_id` | yes | Must match the object name. Idempotency key. |
 | `repo_url` | yes | |
-| `issue_ref` | one of | |
-| `prompt` | one of | |
+| `prompt` | yes | |
 | `base_branch` | no | default `main` |
-| `branch_name` | yes | Computed by the dispatcher so it's recorded before the run starts. |
-| `skills_ref` | yes | no default — an unset ref must fail loudly, never silently mean `latest` |
-| `harness` | no | default `claude` |
-| `model` | no | |
-| `event_sink` | no | default `stdout` |
-| `event_sink_config` | conditional | JSON; e.g. Temporal task token, or HTTP endpoint |
-| `timeout_seconds` | no | |
 
 No credential is ever baked into the image, and no credential is ever written into a Task
 File — secrets stay exclusively in environment variables injected from Secret Manager at
@@ -558,11 +578,12 @@ live.
 | OQ-03 | Model credential and billing at DR — direct API key or internal gateway? | See A-01. Determines whether `ANTHROPIC_BASE_URL` is optional or mandatory at DR. |
 | OQ-04 | Temporal Cloud pricing floor for personal use | See A-03. Check early — it is cheap to check and expensive to discover late. |
 | OQ-05 | Does the runner own git operations, or the agent? | Direction is decided (runner — §3.1). Open in its details: branch naming scheme, commit trailers, PR body template, and what happens when the agent leaves the tree dirty in an unexpected way. |
-| OQ-06 | Where does the Skill Pack live? | Same repo (simple, couples skill releases to harness releases), separate repo (independent versioning, needs its own credential), or a released artifact. Affects `SKILLS_REPO_URL` and the DR egress question. |
+| OQ-06 | Where does the Skill Pack live? | **Deferred 2026-09-03** — v1 bakes skills into the image, so this doesn't need answering yet. Revisit alongside §3.5 when runtime-selected skills come back. |
 | OQ-07 | Cloud Run Jobs maximum task timeout | **Verify against current GCP documentation rather than assuming.** Determines whether long tasks need chunking. |
 | OQ-08 | What does `/out` carry, and does it survive? | **Resolved 2026-09-03.** Nothing — `/out` is removed. `RunResult` is written to GCS (`results/{run_id}.json`, §4.3) instead, which survives the container by construction. |
 | OQ-09 | IAM for the `TASK_BUCKET` — who reads/writes what? | Dispatcher: write `tasks/`, read `results/`. Container: read `tasks/`, write `results/`. A least-privilege split needs specifying before this ships. |
 | OQ-10 | Retention on Task Files and Result Files | Cheap and harmless at personal scale; needs a lifecycle policy before volume or compliance makes it not-harmless. Not urgent for v1. |
+| OQ-11 | How does the harness derive `branch_name`? | A deterministic slug of `prompt` (cheap, same input → same name always) vs. a small model call that summarises the task into a human-friendly name (nicer, non-deterministic, needs its own failure handling). Not yet decided. |
 
 ---
 
@@ -596,6 +617,14 @@ live.
 - **Unpinned `latest` skills** — rejected outright. Non-reproducible and unreviewable.
 - **Resumable sessions, warm pools, fan-out, multi-tenancy** — all deferred to §9. Each
   adds real state to a design whose main virtue is having none.
+- **Structured `issue_ref`, `branch_name`, `skills_ref`, `harness`, `model`,
+  `event_sink`/`event_sink_config`, `timeout_seconds` as Task File fields** — **removed
+  2026-09-03** ([§4.1](#41-taskspec--the-input), [§4.4](#44-environment-variable-contract)).
+  None of these are wrong ideas; each just assumes a choice this project doesn't have yet:
+  a second harness or model to choose between, a second `EventSink` to route to, a real
+  Skill Pack repo, a per-task timeout anyone could actually tune. Carrying the field before
+  the choice exists is speculative configurability, not flexibility. See §9 for when each
+  is worth reintroducing.
 
 The through-line: this is a stateless, git-only, one-shot container, and nearly everything
 excluded above was excluded because it would have added state.
@@ -618,6 +647,16 @@ excluded above was excluded because it would have added state.
 - **Additional harness adapters** (Codex, Gemini CLI) — the real proof that `Harness` is an
   abstraction rather than a single-implementation interface. Until a second adapter exists,
   assume it leaks.
+- **Runtime-selected skills (§3.5).** Pinned-ref-from-the-orchestrator was the original
+  decision and the reasoning still holds; it's deferred, not wrong, until there's an actual
+  Skill Pack repo and a second environment to justify it.
+- **`EventSink` plugins (Temporal, HTTP).** Worth building the day there's a second
+  consumer of Agent Events; `stdout` alone is enough while there's only one.
+- **Per-task `timeout_seconds`.** Revisit once the platform-level Cloud Run Job timeout
+  (OQ-07) proves too coarse for some real task.
+- **A richer spec pointer than free-form `prompt`.** If specs routinely live somewhere
+  queryable (issues, a doc system), a structured reference may earn its keep again — only
+  once that pattern is real, not speculative.
 
 ---
 
@@ -633,10 +672,10 @@ document is actionable rather than aspirational.
 | `runner/main.py` | Hardcodes the prompt (`"Describe what you think this repo is about"`); implements none of the lifecycle in §3.1. | Read the `TaskSpec` from the Task File in GCS, resolved via `TASK_ID` (§4.1, §4.4); implement the lifecycle. |
 | `runner/main.py` | Prints assistant text to stdout as prose. | Emit NDJSON `AgentEvent`s; add the `EventSink` seam. |
 | — | No `RunResult`, no exit code taxonomy. | §4.3 and §4.5. |
-| `runner/model/task.py` | `Task.from_json()` / `CodingTask.from_json()` read a **local JSON file by path**. | Resolve the Task File from GCS via `TASK_ID` + `TASK_BUCKET` (§4.1, §4.4), not a local path. `from_json()`'s parsing logic can stay — only its input source changes, from a file handle to downloaded object bytes. |
+| `runner/model/task.py` | `TaskSpec.from_json()` / `from_dict()` implemented — parses and validates `task_id`, `repo_url`, `prompt`, `base_branch` (§4.1). Does **not** fetch from GCS. | Wire `TASK_ID` + `TASK_BUCKET` resolution — a small `runner/gcp_storage.py` (mirroring `gcp_secrets.py`) that downloads the object and calls `TaskSpec.from_json()`. |
 | `Dockerfile` | Creates `/workspace /task /out`. | `/workspace` stays. `/task` and `/out` are both removed: `/out` per OQ-08 (resolved — `RunResult` goes to GCS); `/task` was already unused and stays unused now that the Task File is resolved from GCS, not a mounted path. |
 | `Dockerfile` | Commented-out `gcloud` install. | Remove the commented CLI install — GCS access is via the `google-cloud-storage` Python client, not the `gcloud` CLI (see §8). |
-| `Dockerfile` | No `gh` CLI, no Skill Pack fetch step. | Both needed for the lifecycle in §3.1. |
+| `Dockerfile` | No `gh` CLI. | Needed for the lifecycle in §3.1. A Skill Pack fetch step is **not** needed for v1 — skills are baked into the image (§3.5). |
 | `requirements.txt` | Only `google-cloud-secret-manager`. | Add `google-cloud-storage`. |
 
 What is already right and should not be disturbed: the non-root `agent` user, the absence

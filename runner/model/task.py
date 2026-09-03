@@ -1,43 +1,61 @@
 import json
 
-class Task: 
-    """ 
-    Models the Task that a Coding Agent can receive.
+
+class TaskSpec:
+    """
+    Models the TaskSpec described in docs/concept.md §4.1 — the input to one run.
+
+    Delivered as a JSON object in GCS (the Task File — docs/concept.md §4.1, §4.4),
+    resolved by the container via the TASK_ID execution override. This class only
+    knows how to parse and validate that JSON; fetching the object from GCS is the
+    caller's responsibility, not this class's.
+
+    Deliberately minimal for v1: skills_ref, harness, model, event_sink and
+    timeout_seconds are all hardcoded elsewhere for now rather than accepted here —
+    see docs/concept.md §8 for why each was deferred rather than built.
     """
 
-    prompt: str # The prompt that defines what this agent needs to do.
+    task_id: str  # Stable id from the orchestrator. Idempotency key; must match the Task File's object name.
+    repo_url: str  # HTTPS clone URL.
+    prompt: str  # The task, in the orchestrator's own words. May point at an issue, a doc, or just be the instructions.
+    base_branch: str  # Default "main".
 
-    def __init__(self, prompt: str) -> None:
+    def __init__(
+        self,
+        task_id: str,
+        repo_url: str,
+        prompt: str,
+        base_branch: str = "main",
+    ) -> None:
+        self.task_id = task_id
+        self.repo_url = repo_url
         self.prompt = prompt
+        self.base_branch = base_branch
 
     @staticmethod
-    def from_json(task_json_file: str) -> 'Task':
-        
-        # Parse the JSON file to get the task details
-        with open(task_json_file, 'r') as f:
-            task_details = json.load(f)
+    def from_dict(task_details: dict) -> "TaskSpec":
+        """Build a TaskSpec from an already-parsed Task File (docs/concept.md §4.1, §4.4)."""
 
-        if "prompt" not in task_details:
-            raise ValueError("The task JSON file must contain a 'prompt' field.")
+        required = ["task_id", "repo_url", "prompt"]
+        missing = [field for field in required if not task_details.get(field)]
 
-        return Task(prompt=task_details["prompt"])
+        if missing:
+            raise ValueError(f"The Task File is missing required field(s): {', '.join(missing)}.")
 
-class CodingTask(Task): 
-
-    repo: str # Repository that this coding task is referred to. Has to be a full URL to a GitHub repository.
-
-    def __init__(self, prompt: str, repo: str) -> None:
-        super().__init__(prompt)
-        self.repo = repo
+        return TaskSpec(
+            task_id=task_details["task_id"],
+            repo_url=task_details["repo_url"],
+            prompt=task_details["prompt"],
+            base_branch=task_details.get("base_branch", "main"),
+        )
 
     @staticmethod
-    def from_json(task_json_file: str) -> 'CodingTask':
+    def from_json(task_json: str) -> "TaskSpec":
+        """Build a TaskSpec from the raw JSON text of a Task File.
 
-        # Parse the JSON file to get the task details
-        with open(task_json_file, 'r') as f:
-            task_details = json.load(f)
-
-        if "prompt" not in task_details or "repo" not in task_details:
-            raise ValueError("The coding task JSON file must contain both 'prompt' and 'repo' fields.")
-
-        return CodingTask(prompt=task_details["prompt"], repo=task_details["repo"])
+        Takes JSON content, not a file path — the Task File lives in GCS
+        (docs/concept.md §4.1), not on local disk. Fetching the object's bytes
+        is the caller's job (e.g. a future runner/gcp_storage.py, mirroring the
+        existing runner/gcp_secrets.py).
+        """
+        return TaskSpec.from_dict(json.loads(task_json))
