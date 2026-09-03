@@ -11,12 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install -g @anthropic-ai/claude-code
 
+WORKDIR /app
+COPY requirements.txt /app/requirements.txt
+# Debian bookworm's system Python is externally-managed (PEP 668); this is
+# a single-purpose container image, not a shared interpreter, so installing
+# system-wide is fine.
+RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
+
 # Non-root. The agent gets no more privilege than it needs.
 RUN useradd -m -u 1001 agent \
     && mkdir -p /workspace /task /out \
     && chown -R agent:agent /workspace /task /out
 
-WORKDIR /app
 COPY runner/ /app/runner/
 # COPY schemas/ /app/schemas/
 
@@ -26,5 +32,6 @@ ENV PYTHONUNBUFFERED=1 \
     GIT_TERMINAL_PROMPT=0
 
 # No credentials in the image. ANTHROPIC_BASE_URL points at your gateway;
-# tokens arrive as env at execution time from Secret Manager.
+# the Claude OAuth token is fetched from GCP Secret Manager at startup
+# (GCP_PID + secret "claude_token"), using the job's service account.
 ENTRYPOINT ["python3", "-m", "runner.main"]

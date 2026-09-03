@@ -1,36 +1,55 @@
-import json
-import subprocess
+import os
+
+from runner.config.runner import RunnerConfig
+from runner.gcp_storage import get_object
+from runner.model.task import TaskSpec
 
 from .harness.claude import Claude
 
-def main() -> int: 
-    
-    cmd = Claude().build_command("Describe what you think this repo is about", model="haiku")
-    
-    try: 
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        
-        with proc.stdout as stdout: # type: ignore
-            
-            for line in stdout:
-                
-                # The line is a json. Let's parse it.
-                structured_output = json.loads(line) 
+# This container's identity within the shared agent-tasks bucket. Fixed, not
+# configurable — it names *this* repo, not a per-deployment choice.
+# Layout: gs://{GCP_PID}-agents-data/coder/{TASK_ID}/task.json (docs/concept.md §4.1, §4.4).
+AGENT_NAME = "coder"
 
-                if structured_output.get("type") == "assistant": 
-                    if "message" in structured_output and "content" in structured_output.get("message") and structured_output.get("message"): 
-                        msg = structured_output.get("message").get("content")[0]
-                        
-                        if msg.get("type") in ["thinking", "text"]: 
-                            print(msg.get(msg.get("type")))
-                
-        return proc.wait()
-    
-    except subprocess.CalledProcessError as e:
-        print(f"Command '{' '.join(cmd)}' failed with exit code {e.returncode}")
-        print(f"Error output: {e.stderr}")
-        return e.returncode
-    
+
+def task_bucket() -> str:
+    return f"{os.environ.get('GCP_PID')}-agents-data"
+
+
+def task_object_path(task_id: str, filename: str) -> str:
+    return f"{AGENT_NAME}/{task_id}/{filename}"
+
+
+def resolve_task() -> TaskSpec:
+    """Resolve the TaskSpec for this run from its Task File in GCS."""
+
+    task_id = os.environ.get("TASK_ID")
+
+    if not task_id:
+        raise ValueError("TASK_ID is not set.")
+
+    task_json = get_object(task_bucket(), task_object_path(task_id, "task.json"))
+
+    return TaskSpec.from_json(task_json)
+
+
+def main() -> int:
+
+    harness = Claude()
+
+    # 1. Load runner config (secrets)
+    RunnerConfig.get_config(harness)
+
+    # 2. Resolve the task from its Task File in GCS
+    task = resolve_task()
+
+    # 3. Build and run the command, tracing every stdout line to GCS
+    return harness.run_command(
+        harness.build_command(task.prompt, model="sonnet"),
+        trace_bucket=task_bucket(),
+        trace_object=task_object_path(task.task_id, "trace.json"),
+    )
+
 
 if __name__ == "__main__":
     exit_code = main()
