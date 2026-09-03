@@ -26,8 +26,14 @@ class RunnerConfig:
         # 1. Load secrets from GCP Secrets Manager
         # Parallelize the fetching of secrets from GCP Secret Manager for efficiency.
         for secret_name in harness_secrets_names: 
-            secret_value = get_secret(project_id, secret_name)  # type: ignore
-            secrets[secret_name] = secret_value
+
+            try: 
+                secret_value = get_secret(project_id, secret_name)  # type: ignore
+                secrets[secret_name] = secret_value
+
+            except Exception as e:
+                print(f"Failed to fetch secret '{secret_name}' from GCP Secret Manager: {e}")
+                raise e
 
         # 2. Load secrets from environment variables
 
