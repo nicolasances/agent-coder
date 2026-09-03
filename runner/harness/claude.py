@@ -14,16 +14,29 @@ class Claude(Harness):
 
     def get_llm_message(self, stdout_line: str) -> str:
         # The line is a json. Let's parse it.
-        structured_output = json.loads(stdout_line) 
+        structured_output = json.loads(stdout_line)
 
-        if structured_output.get("type") == "assistant": 
-            if "message" in structured_output and "content" in structured_output.get("message") and structured_output.get("message"): 
-                msg = structured_output.get("message").get("content")[0]
+        if structured_output.get("type") != "assistant":
+            return ""
 
-                if msg.get("type") in ["thinking", "text"]: 
-                    return msg.get(msg.get("type"))
+        content = (structured_output.get("message") or {}).get("content") or []
 
-        return ""
+        # A single assistant event can carry several content blocks (e.g. a
+        # thinking block followed by one or more tool calls) — render all of
+        # them, not just the first, or most of a real run goes silent.
+        lines = []
+
+        for block in content:
+            block_type = block.get("type")
+
+            if block_type in ["thinking", "text"]:
+                text = block.get(block_type)
+                if text:
+                    lines.append(text)
+            elif block_type == "tool_use":
+                lines.append(f"[tool] {block.get('name', 'tool')}({block.get('input', {})})")
+
+        return "\n".join(lines)
 
     def build_env(self, secrets: dict) -> dict:
         # Build the environment variables needed to run the harness command.

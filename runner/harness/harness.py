@@ -47,12 +47,13 @@ class Harness(ABC):
             proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
             
             with proc.stdout as stdout: # type: ignore
-                
+
                 for line in stdout:
                     msg = self.get_llm_message(line)
-                    print(msg)
-                    
-                    
+                    if msg:
+                        print(msg, flush=True)
+
+
             return proc.wait()
         
         except subprocess.CalledProcessError as e:
