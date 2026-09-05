@@ -50,7 +50,7 @@ class Claude(Harness):
 
         return env  
     
-    def build_command(self, prompt: str, model: str | None, permission_mode: str = "acceptEdits"): 
+    def build_command(self, prompt: str, model: str | None, permission_mode: str = "auto"): 
 
         chosen_model = model if model else "sonnet"
         
