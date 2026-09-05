@@ -22,10 +22,27 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o 
 RUN npm install -g @anthropic-ai/claude-code
 RUN npm install -g skills
 
-# Add coding skills. `npm install -g skills` puts a `skills` binary on PATH
-# (bin/cli.mjs) — it's not an npm subcommand, so it must be invoked directly.
-RUN skills add nicolasances/skills-coding -y
+# Non-root. The agent gets no more privilege than it needs. Created here,
+# ahead of the skills install below, so that install lands in the right
+# user's home — not root's.
+RUN useradd -m -u 1001 agent \
+    && mkdir -p /workspace /task /out \
+    && chown -R agent:agent /workspace /task /out
 
+USER agent
+ENV HOME=/home/agent
+
+# Add coding skills, globally (--global) so they apply no matter which repo
+# gets cloned into /workspace at runtime — not scoped to whatever directory
+# the build happens to be in. Must run as `agent`, after HOME is set:
+# running this as root before HOME/USER were set both (a) wrote to root's
+# home instead of agent's, and (b) defaulted to a *project*-scoped install
+# rooted at cwd (which was `/`, since WORKDIR hadn't been set yet) — the
+# installed commands (e.g. `/implement`) were never visible to the actual
+# runtime user or its actual working directory.
+RUN npx skills add nicolasances/skills-coding --global -y
+
+USER root
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 # Debian bookworm's system Python is externally-managed (PEP 668); this is
@@ -33,17 +50,11 @@ COPY requirements.txt /app/requirements.txt
 # system-wide is fine.
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
-# Non-root. The agent gets no more privilege than it needs.
-RUN useradd -m -u 1001 agent \
-    && mkdir -p /workspace /task /out \
-    && chown -R agent:agent /workspace /task /out
-
 COPY runner/ /app/runner/
 # COPY schemas/ /app/schemas/
 
 USER agent
 ENV PYTHONUNBUFFERED=1 \
-    HOME=/home/agent \
     GIT_TERMINAL_PROMPT=0
 
 # No credentials in the image. ANTHROPIC_BASE_URL points at your gateway;

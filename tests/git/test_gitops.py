@@ -20,7 +20,7 @@ def test_push_branch_fetches_token_from_secret_manager_using_gcp_pid():
 
         git_ops.push_branch()
 
-    mock_get_secret.assert_called_once_with("my-project", "github-token")
+    mock_get_secret.assert_called_once_with("my-project", "coding-agent-gh-token")
 
 
 def test_push_branch_invokes_git_push_with_authenticated_url_and_branch():
@@ -99,7 +99,7 @@ def test_create_pull_request_fetches_token_from_secret_manager_using_gcp_pid():
 
         git_ops.create_pull_request(title="Fix the bug", head="agent/t-1", base="main")
 
-    mock_get_secret.assert_called_once_with("my-project", "github-token")
+    mock_get_secret.assert_called_once_with("my-project", "coding-agent-gh-token")
 
 
 def test_create_pull_request_invokes_gh_pr_create_with_head_and_base():
