@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g @anthropic-ai/claude-code
 RUN npm install -g skills
 
+# Add coding skills
+RUN npm skills add nicolasances/skills-coding -y 
+
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 # Debian bookworm's system Python is externally-managed (PEP 668); this is
