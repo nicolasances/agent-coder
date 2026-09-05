@@ -24,7 +24,7 @@ Then run it:
 e.g. 
 ```bash
  docker run --rm \
-  -e GCP_PID="totoexperiments" \    
+  -e GCP_PID="ASD" \    
   -e TASK_ID="test-task-001" \
   -e GOOGLE_APPLICATION_CREDENTIALS=/home/agent/adc.json \
   -v "$HOME/dev/keys/toto-ms-llm-dev.json:/home/agent/adc.json:ro" \
