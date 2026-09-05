@@ -38,7 +38,7 @@ class GitOps:
         if not self.local_path:
             raise RuntimeError("Cannot push: clone_repo() must succeed before push_branch() can run.")
 
-        token = get_secret(gcp_pid, "github-token")
+        token = get_secret(gcp_pid, "coding-agent-gh-token")
         authenticated_url = self.repoURL.replace("https://", f"https://x-access-token:{token}@", 1)
 
         # The token only ever appears as a one-off push argument, never persisted via
@@ -62,7 +62,7 @@ class GitOps:
         if not self.local_path:
             raise RuntimeError("Cannot open a pull request: clone_repo() must succeed before create_pull_request() can run.")
 
-        token = get_secret(gcp_pid, "github-token")
+        token = get_secret(gcp_pid, "coding-agent-gh-token")
         env = {**os.environ, "GH_TOKEN": token}
 
         # gh reads GH_TOKEN from the environment natively — no `gh auth login` needed,
