@@ -5,6 +5,7 @@ import subprocess
 
 from runner.gcp_storage import put_object
 from runner.model.task import TaskSpec
+from runner.gcp_secrets import get_secret
 
 class Harness(ABC):
 
