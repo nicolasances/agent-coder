@@ -474,9 +474,20 @@ almost none of them do.
 | Variable | Required | Notes |
 |---|---|---|
 | `GCP_PID` | yes | GCP project id. Used both for Secret Manager (as before) and to derive the bucket — `{GCP_PID}-agents-data` — holding Task Files, Result Files and Trace Files, one folder per agent (`coder/…`), shared with other agents. *(Revised 2026-09-03 — supersedes the `TASK_BUCKET` variable this section originally specified; see §4.1.)* |
-| `GITHUB_TOKEN` | yes | secret, injected at execution |
 | `ANTHROPIC_API_KEY` | yes | secret, injected at execution |
 | `ANTHROPIC_BASE_URL` | no | set when routing via an internal gateway |
+
+**`GITHUB_TOKEN` reconciled (implemented 2026-09-03, issue #1) — removed from the table
+above.** It was listed here as a raw deployment-level env var, which never matched how
+`claude-token` actually works, and nothing implemented either path. The mechanism now
+mirrors `claude-token` exactly: a GCP Secret Manager secret named `github-token`, fetched
+via the same `runner/gcp_secrets.get_secret()` helper — but by `GitOps`, not `Harness`,
+since git/GitHub credentials are a different concern from the LLM CLI's own. It's fetched
+lazily, at the point `push_branch()` or `create_pull_request()` needs it, not once at
+startup, and it never becomes a literal `GITHUB_TOKEN` variable in this container's own
+environment: `push_branch()` uses it as a one-off authenticated push URL (never written
+to `.git/config`), and `create_pull_request()` passes it as `GH_TOKEN` in the `gh`
+subprocess's environment specifically, which `gh` reads natively.
 
 `SKILLS_REPO_URL` is removed *(2026-09-03)* — v1 bakes skills into the image, so there is
 nothing to fetch. See [§3.5](#35-skills--pinned-not-latest).
