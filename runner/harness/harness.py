@@ -80,7 +80,7 @@ class Harness(ABC):
 
         return self
     
-    def run_task(self, task: TaskSpec, trace_object: str | None = None) -> int:
+    def run_task(self, task: TaskSpec) -> int:
         """Run the task in a subprocess, streaming output to stdout and
         collecting every raw stdout line into a trace.
 

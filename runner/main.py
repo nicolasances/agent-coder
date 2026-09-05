@@ -51,10 +51,7 @@ def main() -> int:
     task = resolve_task()
 
     # 4. Build and run the command, tracing every stdout line to GCS
-    return harness.run_task(
-        task,
-        trace_object=task_object_path(task.task_id, "trace.json"),
-    )
+    return harness.run_task(task)
 
 
 if __name__ == "__main__":
