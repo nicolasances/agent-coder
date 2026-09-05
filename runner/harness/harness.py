@@ -33,7 +33,7 @@ class Harness(ABC):
         ...
     
     @abstractmethod
-    def build_command(self, prompt: str) -> list[str]: 
+    def build_command(self, prompt: str, model: str | None) -> list[str]: 
         ...
 
     @abstractmethod
@@ -96,11 +96,14 @@ class Harness(ABC):
 
         env = {**os.environ, **self.build_env(self.secrets)}
 
-        command = self.build_command(task.prompt)
+        # Build the command to run the harness. 
+        # This is specific to the chosen harness implementation (e.g., Claude, GPT, etc.) and is defined in the subclass.
+        command = self.build_command(task.prompt, self.model)
 
         trace: list = []
 
         try:
+            # Start the process
             proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
 
             with proc.stdout as stdout: # type: ignore

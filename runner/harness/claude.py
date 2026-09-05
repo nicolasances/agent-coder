@@ -50,13 +50,15 @@ class Claude(Harness):
 
         return env  
     
-    def build_command(self, prompt: str, model: str = "sonnet", permission_mode: str = "acceptEdits"): 
+    def build_command(self, prompt: str, model: str | None, permission_mode: str = "acceptEdits"): 
+
+        chosen_model = model if model else "sonnet"
         
         cmd = [
             "claude", 
             "-p", 
             prompt, 
-            "--model", model,
+            "--model", chosen_model,
             "--output-format", "stream-json",
             "--verbose",
             "--permission-mode", permission_mode
