@@ -4,6 +4,7 @@ import os
 import subprocess
 
 from runner.gcp_storage import put_object
+from runner.model.task import TaskSpec
 
 class Harness(ABC):
 
@@ -25,7 +26,7 @@ class Harness(ABC):
         ...
     
     @abstractmethod
-    def build_command(self, prompt: str, model: str, permission_mode: str) -> list[str]: 
+    def build_command(self, prompt: str) -> list[str]: 
         ...
 
     @abstractmethod
@@ -40,7 +41,7 @@ class Harness(ABC):
         """
         ...
 
-    def initialize(self) -> None:
+    def initialize(self) -> "Harness":
         """Perform any necessary initialization for the harness.
 
         By default, it loads the secrets that this harness needs. 
@@ -68,9 +69,11 @@ class Harness(ABC):
 
         self.set_secrets(secrets)
         self.initialized = True
+
+        return self
     
-    def run_command(self, command: list[str], trace_bucket: str | None = None, trace_object: str | None = None) -> int:
-        """Run the command in a subprocess, streaming output to stdout and
+    def run_task(self, task: TaskSpec, trace_bucket: str | None = None, trace_object: str | None = None) -> int:
+        """Run the task in a subprocess, streaming output to stdout and
         collecting every raw stdout line into a trace.
 
         If trace_bucket and trace_object are given, the trace is uploaded to
@@ -84,6 +87,8 @@ class Harness(ABC):
             raise ValueError("Harness has not been initialized. Please call initialize() before running the command.")
 
         env = {**os.environ, **self.build_env(self.secrets)}
+        command = self.build_command(task.prompt)
+
         trace: list = []
 
         try:
