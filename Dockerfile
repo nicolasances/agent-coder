@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    && ln -s /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud
 
 RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g skills
 
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
