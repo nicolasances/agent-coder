@@ -5,9 +5,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git ca-certificates curl python3 python3-pip ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
-# gcloud CLI, for object-store I/O only. 
+# gcloud CLI, for object-store I/O only.
 #RUN curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=/opt \
 #    && ln -s /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud
+
+# GitHub CLI — needed for `gh pr create` (docs/concept.md §3.1, §4.4). Standard
+# apt install per https://github.com/cli/cli/blob/trunk/docs/install_linux.md;
+# re-check that doc if this ever stops working, rather than assuming it's stale.
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @anthropic-ai/claude-code
 RUN npm install -g skills

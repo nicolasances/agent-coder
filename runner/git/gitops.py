@@ -46,3 +46,21 @@ class GitOps:
             raise RuntimeError(f"Failed to push branch {self.branch} to {self.repoURL}. Exit code: {exit_code}")
         else:
             print(f"Successfully pushed branch {self.branch} to {self.repoURL}")
+
+    def create_pull_request(self, title: str, head: str, base: str, body: str = "") -> str:
+
+        if not self.local_path:
+            raise RuntimeError("Cannot open a pull request: clone_repo() must succeed before create_pull_request() can run.")
+
+        token = get_secret(os.environ.get("GCP_PID"), "github-token")
+        env = {**os.environ, "GH_TOKEN": token}
+
+        # gh reads GH_TOKEN from the environment natively — no `gh auth login` needed,
+        # and the token never touches disk.
+        proc = subprocess.Popen(["gh", "pr", "create", "--title", title, "--body", body, "--head", head, "--base", base], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=self.local_path, env=env)
+        stdout, stderr = proc.communicate()
+
+        if proc.returncode != 0:
+            raise RuntimeError(f"Failed to create pull request for branch {head} into {base}. Exit code: {proc.returncode}. Error: {stderr}")
+
+        return stdout.strip()
