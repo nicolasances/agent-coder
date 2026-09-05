@@ -35,15 +35,13 @@ def resolve_task() -> TaskSpec:
 
 def main() -> int:
 
-    harness = Claude()
+    # 1. Load the harness
+    harness = Claude().initialize()
 
-    # 1. Load runner config (secrets)
-    RunnerConfig.get_config(harness)
-
-    # 2. Resolve the task from its Task File in GCS
+    # 3. Resolve the task from its Task File in GCS
     task = resolve_task()
 
-    # 3. Build and run the command, tracing every stdout line to GCS
+    # 4. Build and run the command, tracing every stdout line to GCS
     return harness.run_command(
         harness.build_command(task.prompt, model="sonnet"),
         trace_bucket=task_bucket(),

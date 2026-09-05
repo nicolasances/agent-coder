@@ -7,6 +7,8 @@ from runner.gcp_storage import put_object
 
 class Harness(ABC):
 
+    initialized: bool = False
+
     def __init__(self): 
         pass
 
@@ -38,6 +40,35 @@ class Harness(ABC):
         """
         ...
 
+    def initialize(self) -> None:
+        """Perform any necessary initialization for the harness.
+
+        By default, it loads the secrets that this harness needs. 
+        This method can be overridden by subclasses to perform any setup or initialization required before running the harness command. 
+        """
+        project_id = os.environ.get("GCP_PID")
+
+        secrets = {}
+
+        harness_secrets_names = self.get_secrets_names()
+
+        # 1. Load secrets from GCP Secrets Manager
+        # Parallelize the fetching of secrets from GCP Secret Manager for efficiency.
+        for secret_name in harness_secrets_names: 
+
+            try: 
+                secret_value = get_secret(project_id, secret_name)  # type: ignore
+                secrets[secret_name] = secret_value
+
+                print(f"Loaded secret '{secret_name}' from GCP Secret Manager.")
+
+            except Exception as e:
+                print(f"Failed to fetch secret '{secret_name}' from GCP Secret Manager: {e}")
+                raise e
+
+        self.set_secrets(secrets)
+        self.initialized = True
+    
     def run_command(self, command: list[str], trace_bucket: str | None = None, trace_object: str | None = None) -> int:
         """Run the command in a subprocess, streaming output to stdout and
         collecting every raw stdout line into a trace.
@@ -49,8 +80,8 @@ class Harness(ABC):
         losing the actual work.
         """
 
-        if not hasattr(self, 'secrets'):
-            raise ValueError("Secrets have not been set. Please call set_secrets() before running the command.")
+        if not self.initialized:
+            raise ValueError("Harness has not been initialized. Please call initialize() before running the command.")
 
         env = {**os.environ, **self.build_env(self.secrets)}
         trace: list = []
