@@ -1,6 +1,7 @@
 import os
 
 from runner.gcp_storage import get_object
+from runner.git.gitops import GitOps
 from runner.harness.harness import HarnessInit
 from runner.model.task import TaskSpec
 
@@ -44,14 +45,20 @@ def harness_init() -> HarnessInit:
 
 def main() -> int:
 
+
     # 1. Load the harness
     harness = Claude().initialize(harness_init())
 
     # 3. Resolve the task from its Task File in GCS
     task = resolve_task()
 
-    # 4. Build and run the command, tracing every stdout line to GCS
-    return harness.run_task(task)
+    # 4. Clone the repo
+    git_ops = GitOps(repoURL=task.repo_url, branch=task.base_branch)
+
+    git_ops.clone_repo()
+
+    # 5. Build and run the command in the cloned repo, tracing every stdout line to GCS
+    return harness.run_task(task, workdir=git_ops.local_path)
 
 
 if __name__ == "__main__":

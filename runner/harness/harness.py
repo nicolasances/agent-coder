@@ -80,9 +80,17 @@ class Harness(ABC):
 
         return self
     
-    def run_task(self, task: TaskSpec) -> int:
+    def run_task(self, task: TaskSpec, workdir: str | None = None) -> int:
         """Run the task in a subprocess, streaming output to stdout and
         collecting every raw stdout line into a trace.
+
+        workdir is where the harness CLI actually operates — the freshly
+        cloned repo (GitOps.local_path), not this process's own cwd. Passed
+        straight through to subprocess.Popen's cwd, which is what decides a
+        CLI's project root; it's scoped to the child process only, so this
+        runner's own working directory is never touched. Left as None for
+        callers with no repo to operate on (e.g. tests), matching Popen's own
+        default of inheriting the caller's cwd.
 
         If trace_bucket and trace_object are given, the trace is uploaded to
         GCS as a JSON array once the process exits. Writing the trace is
@@ -96,7 +104,7 @@ class Harness(ABC):
 
         env = {**os.environ, **self.build_env(self.secrets)}
 
-        # Build the command to run the harness. 
+        # Build the command to run the harness.
         # This is specific to the chosen harness implementation (e.g., Claude, GPT, etc.) and is defined in the subclass.
         command = self.build_command(task.prompt, self.model)
 
@@ -104,7 +112,7 @@ class Harness(ABC):
 
         try:
             # Start the process
-            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=workdir)
 
             with proc.stdout as stdout: # type: ignore
 
