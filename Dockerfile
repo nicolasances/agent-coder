@@ -22,8 +22,9 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o 
 RUN npm install -g @anthropic-ai/claude-code
 RUN npm install -g skills
 
-# Add coding skills
-RUN npm skills add nicolasances/skills-coding -y 
+# Add coding skills. `npm install -g skills` puts a `skills` binary on PATH
+# (bin/cli.mjs) — it's not an npm subcommand, so it must be invoked directly.
+RUN skills add nicolasances/skills-coding -y
 
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
