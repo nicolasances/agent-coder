@@ -7,12 +7,18 @@ from runner.gcp_storage import put_object
 from runner.model.task import TaskSpec
 from runner.gcp_secrets import get_secret
 
+class HarnessInit: 
+    def __init__(self, agent_data_bucket: str, trace_object_path: str): 
+        self.agent_data_bucket = agent_data_bucket
+        self.trace_object_path = trace_object_path
+
 class Harness(ABC):
 
     initialized: bool = False
+    harness_config: HarnessInit
 
-    def __init__(self): 
-        pass
+    def __init__(self, model: str | None = None): 
+        self.model = model
 
     def set_secrets(self, secrets: dict): 
         self.secrets = secrets
@@ -42,7 +48,7 @@ class Harness(ABC):
         """
         ...
 
-    def initialize(self) -> "Harness":
+    def initialize(self, harness_init: HarnessInit) -> "Harness":
         """Perform any necessary initialization for the harness.
 
         By default, it loads the secrets that this harness needs. 
@@ -69,11 +75,12 @@ class Harness(ABC):
                 raise e
 
         self.set_secrets(secrets)
+        self.harness_config = harness_init
         self.initialized = True
 
         return self
     
-    def run_task(self, task: TaskSpec, trace_bucket: str | None = None, trace_object: str | None = None) -> int:
+    def run_task(self, task: TaskSpec, trace_object: str | None = None) -> int:
         """Run the task in a subprocess, streaming output to stdout and
         collecting every raw stdout line into a trace.
 
@@ -88,6 +95,7 @@ class Harness(ABC):
             raise ValueError("Harness has not been initialized. Please call initialize() before running the command.")
 
         env = {**os.environ, **self.build_env(self.secrets)}
+
         command = self.build_command(task.prompt)
 
         trace: list = []
@@ -111,7 +119,8 @@ class Harness(ABC):
             print(f"Error output: {e.stderr}")
             exit_code = e.returncode
 
-        self._write_trace(trace, trace_bucket, trace_object)
+        # Write the trace to the target bucket
+        self._write_trace(trace, self.harness_config.agent_data_bucket, self.harness_config.trace_object_path)
 
         return exit_code
 
