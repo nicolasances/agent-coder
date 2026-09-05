@@ -1,6 +1,6 @@
 {
-    "taskId": "test-task-001", 
+    "taskId": "test-task-002", 
     "repoURL": "https://github.com/nicolasances/tome.git", 
-    "prompt": "Describe in one sentence what this repo is about.", 
+    "prompt": "/implement feature described in https://github.com/nicolasances/tome/issues/275", 
     "baseBranch": "main"
 }
