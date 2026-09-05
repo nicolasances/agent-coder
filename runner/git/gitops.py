@@ -9,11 +9,20 @@ TARGET_DIR = "/workspace"
 
 class GitOps: 
 
+    gcp_pid: str
+
     def __init__(self, repoURL: str, branch: str = "main"):
 
         self.repoURL = repoURL
         self.branch = branch
         self.local_path: str | None = None
+
+        gcp_pid = os.environ.get("GCP_PID")
+
+        if not gcp_pid: 
+            raise RuntimeError("Environment variable GCP_PID is not set.")
+        
+        self.gcp_pid = gcp_pid
 
     def clone_repo(self) -> None:
 
@@ -30,15 +39,10 @@ class GitOps:
 
     def push_branch(self) -> None:
 
-        gcp_pid = os.environ.get("GCP_PID")
-
-        if not gcp_pid:
-            raise RuntimeError("GCP_PID environment variable is not set. Cannot fetch GitHub token from GCP Secret Manager.")
-
         if not self.local_path:
             raise RuntimeError("Cannot push: clone_repo() must succeed before push_branch() can run.")
 
-        token = get_secret(gcp_pid, "coding-agent-gh-token")
+        token = get_secret(self.gcp_pid, "coding-agent-gh-token")
         authenticated_url = self.repoURL.replace("https://", f"https://x-access-token:{token}@", 1)
 
         # The token only ever appears as a one-off push argument, never persisted via
@@ -54,15 +58,10 @@ class GitOps:
 
     def create_pull_request(self, title: str, head: str, base: str, body: str = "") -> str:
 
-        gcp_pid = os.environ.get("GCP_PID")
-
-        if not gcp_pid:
-            raise RuntimeError("GCP_PID environment variable is not set. Cannot fetch GitHub token from GCP Secret Manager.")
-
         if not self.local_path:
             raise RuntimeError("Cannot open a pull request: clone_repo() must succeed before create_pull_request() can run.")
 
-        token = get_secret(gcp_pid, "coding-agent-gh-token")
+        token = get_secret(self.gcp_pid, "coding-agent-gh-token")
         env = {**os.environ, "GH_TOKEN": token}
 
         # gh reads GH_TOKEN from the environment natively — no `gh auth login` needed,
