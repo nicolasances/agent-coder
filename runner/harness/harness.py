@@ -7,6 +7,8 @@ from runner.gcp_storage import put_object
 from runner.model.task import TaskSpec
 from runner.gcp_secrets import get_secret
 
+SECRET_NAME_CODING_AGENT_GH_TOKEN = "coding-agent-gh-token"
+
 class HarnessInit: 
     def __init__(self, agent_data_bucket: str, trace_object_path: str): 
         self.agent_data_bucket = agent_data_bucket
@@ -16,6 +18,9 @@ class Harness(ABC):
 
     initialized: bool = False
     harness_config: HarnessInit
+    base_secrets = [
+        SECRET_NAME_CODING_AGENT_GH_TOKEN
+    ]
 
     def __init__(self, model: str | None = None): 
         self.model = model
@@ -58,7 +63,7 @@ class Harness(ABC):
 
         secrets = {}
 
-        harness_secrets_names = self.get_secrets_names()
+        harness_secrets_names = self.get_secrets_names() + self.base_secrets
 
         # 1. Load secrets from GCP Secrets Manager
         # Parallelize the fetching of secrets from GCP Secret Manager for efficiency.
@@ -102,7 +107,12 @@ class Harness(ABC):
         if not self.initialized:
             raise ValueError("Harness has not been initialized. Please call initialize() before running the command.")
 
-        env = {**os.environ, **self.build_env(self.secrets)}
+        # General env vars, harness-agnostic
+        agnostic_env = {
+            "GH_TOKEN": self.secrets[SECRET_NAME_CODING_AGENT_GH_TOKEN],
+        }
+
+        env = {**os.environ, **self.build_env(self.secrets), **agnostic_env}
 
         # Build the command to run the harness.
         # This is specific to the chosen harness implementation (e.g., Claude, GPT, etc.) and is defined in the subclass.
