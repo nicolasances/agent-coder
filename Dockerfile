@@ -2,7 +2,7 @@
 FROM node:22-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git ca-certificates curl python3 python3-pip ripgrep \
+        git ca-certificates curl python3 python3-pip python3-venv ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 # gcloud CLI, for object-store I/O only.
@@ -42,22 +42,28 @@ ENV HOME=/home/agent
 # runtime user or its actual working directory.
 RUN npx skills add nicolasances/skills-coding --global -y
 
-USER root
+# A venv, not the system Python: agent owns it outright, so installing into
+# it needs no root and no --break-system-packages workaround for Debian's
+# PEP 668 restriction — that restriction only applies to the system-managed
+# interpreter, which this deliberately isn't.
+RUN python3 -m venv /home/agent/venv
+
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
-# Debian bookworm's system Python is externally-managed (PEP 668); this is
-# a single-purpose container image, not a shared interpreter, so installing
-# system-wide is fine.
-RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
+RUN /home/agent/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 COPY runner/ /app/runner/
 # COPY schemas/ /app/schemas/
 
-USER agent
 ENV PYTHONUNBUFFERED=1 \
     GIT_TERMINAL_PROMPT=0
 
 # No credentials in the image. ANTHROPIC_BASE_URL points at your gateway;
 # the Claude OAuth token is fetched from GCP Secret Manager at startup
 # (GCP_PID + secret "claude_token"), using the job's service account.
-ENTRYPOINT ["python3", "-m", "runner.main"]
+#
+# Runs as `agent` throughout — set once, above, and never switched back to
+# root. The venv's own python3 is used here specifically (not the bare
+# `python3` on PATH), since that's where requirements.txt actually got
+# installed.
+ENTRYPOINT ["/home/agent/venv/bin/python3", "-m", "runner.main"]
