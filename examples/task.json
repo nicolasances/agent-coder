@@ -1,6 +1,6 @@
 {
     "taskId": "test-task-002", 
-    "repoURL": "https://github.com/nicolasances/tome.git", 
-    "prompt": "/implement feature described in https://github.com/nicolasances/tome/issues/275", 
+    "repoURL": "https://github.com/nicolasances/agent-coder.git", 
+    "prompt": "/implement feature described in https://github.com/nicolasances/agent-coder/issues/3", 
     "baseBranch": "main"
 }
