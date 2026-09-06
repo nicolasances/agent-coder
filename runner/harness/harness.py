@@ -9,6 +9,14 @@ from runner.gcp_secrets import get_secret
 
 SECRET_NAME_CODING_AGENT_GH_TOKEN = "coding-agent-gh-token"
 
+# The one and only prompt this container ever issues (docs/concept.md §4.1, issue #5).
+# A run implements exactly one GitHub issue: the only thing that varies between runs is
+# which issue. Deliberately harness-agnostic and lives here, in the base class, rather
+# than in each adapter — see issue #5 for the trade-off that accepts (`/implement` is a
+# Claude Code slash command, so one harness's vocabulary sits in the shared layer until
+# a second harness needs to phrase it differently).
+PROMPT_TEMPLATE = "/implement issue {issue_url}"
+
 class HarnessInit: 
     def __init__(self, agent_data_bucket: str, trace_object_path: str): 
         self.agent_data_bucket = agent_data_bucket
@@ -85,6 +93,16 @@ class Harness(ABC):
 
         return self
     
+    @staticmethod
+    def build_prompt(task: TaskSpec) -> str:
+        """Build the harness prompt for one run.
+
+        Fixed by construction — the TaskSpec carries an issue URL, not instructions,
+        so there is exactly one shape of prompt this container can issue (issue #5).
+        """
+
+        return PROMPT_TEMPLATE.format(issue_url=task.issue_url)
+
     def run_task(self, task: TaskSpec, workdir: str | None = None) -> int:
         """Run the task in a subprocess, streaming output to stdout and
         collecting every raw stdout line into a trace.
@@ -116,7 +134,7 @@ class Harness(ABC):
 
         # Build the command to run the harness.
         # This is specific to the chosen harness implementation (e.g., Claude, GPT, etc.) and is defined in the subclass.
-        command = self.build_command(task.prompt, self.model)
+        command = self.build_command(self.build_prompt(task), self.model)
 
         trace: list = []
 
