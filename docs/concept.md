@@ -2,7 +2,13 @@
 
 > Status: concept / decision document. Parts of it are now implemented — see
 > [Appendix A](#appendix-a--current-repo-state-vs-target) for exactly which.
-> Last revised: 2026-09-03. Task input/output moved from environment variables to
+> Last revised: 2026-09-06. The Task File's free-form `prompt` is replaced by a required
+> `issueURL`, and the harness prompt is fixed to `/implement issue <issueURL>` — a run is
+> now, by construction, the implementation of exactly one GitHub issue (§3.1, §4.1, §4.4,
+> §8, §9); the "runner owns the git operations" decision in §3.1 is reversed to match what
+> the installed skills actually do, which resolves OQ-11 and narrows OQ-05.
+>
+> Previously revised: 2026-09-03. Task input/output moved from environment variables to
 > GCS-backed JSON files (§3.3, §4.4, §6.1, §8); `TaskSpec` cut to four fields, with
 > skills, harness, model, event sink and per-task timeout deferred rather than built
 > (§3.5, §3.6, §4.1, §4.4, §8, §9); Task File JSON keys are camelCase and the bucket is
@@ -32,7 +38,7 @@
 A containerised coding agent. 
 It takes **one task**, produces **one pull request**, and exits.
 
-An external orchestrator starts a container and hands it a task — typically a GitHub issue. 
+An external orchestrator starts a container and hands it a task — always a GitHub issue, since 2026-09-06 (§4.1). 
 The container 
 - clones the repository, 
 - creates a branch, 
@@ -79,7 +85,7 @@ It should work in different contexts:
 |---|---|
 | **Harness** | This repository. The containerised agent tier: one task in, one PR out. |
 | **Adapter** | An implementation of the `Harness` protocol for a specific agent CLI (Claude Code, Codex, Gemini CLI). Knows how to launch that CLI *and* how to read its output. |
-| **Task** | A unit of work small enough for one unattended run. Usually a GitHub issue. |
+| **Task** | A unit of work small enough for one unattended run. **Always** a GitHub issue — the Task File carries an `issueURL`, not instructions (§4.1). |
 | **Run** | One execution of the container against one task. Has an id, a start, an end, an exit code, and a result. |
 | **Orchestrator** | Whatever decides that a task should run, launches it, and records what happened. Temporal at work; undecided at home. **Not in this repository.** |
 | **Dispatcher** | The always-on process that polls the orchestrator for work and launches agent containers. Part of the orchestrator tier, not the harness. |
@@ -115,26 +121,50 @@ resolve task
 
 Every phase emits at least one Agent Event, so a stalled run is diagnosable to the phase.
 
-**Design decision — the runner owns the git operations, not the agent.** The alternative is to tell the agent, in its prompt, to commit and push and open a PR itself. That is tempting because it is less code. It is rejected for three reasons:
+~~**Design decision — the runner owns the git operations, not the agent.**~~ **Reversed
+2026-09-06 (issue #5).** The agent owns them. It creates the branch — naming it after
+reading the issue it was given — commits, pushes, and opens the PR, all through its own
+skills. The runner clones and supervises. The lifecycle above is therefore split, not
+owned end-to-end by the runner:
 
-1. **Determinism.** Branch naming, commit trailers and PR body formatting become code
-   with tests, not prose the model may reinterpret.
+```
+runner:  resolve task → clone repo → run agent CLI → emit Run Result → exit
+agent:                   ↳ read issue → branch → edit → commit → push → open PR
+```
 
-2. **Credential blast radius.** If the runner performs the push, the push credential never
-   needs to be reachable by the agent's shell. The agent edits files; it does not publish.
+**This is recorded as a reversal rather than re-argued, because the code had already
+diverged from the decision and the doc had not noticed.** The `prepare` skill instructs
+the agent to create a `feature/<something>` branch; `build-and-ship` instructs it to
+commit, push, open the PR and link it to the issue. `GitOps.push_branch()` and
+`GitOps.create_pull_request()` exist but are called from nowhere, and there is no
+`checkout -b` in the runner at all. The doc was asserting the opposite of what runs.
+
+The three arguments the original decision rested on are **not** withdrawn — they are what
+it will cost to keep going this way, and they are worth restating as live risks:
+
+1. **Determinism.** Branch naming, commit trailers and PR body formatting are now prose
+   the model interprets, not code with tests. Partly bought back elsewhere: the *task* is
+   now fixed (`/implement issue <issueURL>` — §4.1), so the model's discretion is bounded
+   to how it names and packages the work, not to what the work is.
+
+2. **Credential blast radius.** The push credential is reachable by the agent's shell.
+   `GH_TOKEN` is already in the harness subprocess's environment, so this is the status
+   quo being acknowledged, not a new exposure.
 
 3. **Failure attribution.** "The agent could not solve the task" and "the push was
-   rejected" are different outcomes with different retry semantics. Merging them into one
-   opaque agent turn destroys that distinction.
+   rejected" now collapse into one opaque agent turn. §4.5 still distinguishes exit `20`
+   from exit `30`; nothing currently produces that distinction. Open — see OQ-05.
 
-**Branch naming, specifically (revised 2026-09-03):** the dispatcher no longer supplies
-`branch_name` — see [§4.1](#41-taskspec--the-input). The harness derives it itself from the
-task's `prompt`, once the container has it. That still satisfies the determinism argument
-above only if the derivation is itself deterministic code, not a free-form model turn;
-whether it's a plain slug of the prompt or a small, separately-controlled summarisation
-call is open — see OQ-11.
+`GitOps.push_branch()` and `create_pull_request()` are deliberately **kept**, unused: the
+credential argument above is a real one, and taking git back into the runner later should
+not require rewriting them.
 
-This remains an open question only in its details (see OQ-05), not in its direction.
+**Branch naming, specifically — OQ-11 resolved 2026-09-06.** The dispatcher does not
+supply `branch_name`, and the runner does not derive one. The agent picks it after reading
+the issue, which is the only party that knows what the issue is actually about. The
+earlier candidates — a deterministic slug of `prompt`, or a separate summarisation call —
+are both moot: `prompt` no longer exists (§4.1), and there is no separate call to make
+when the agent is already reading the issue.
 
 ### 3.2 Two-tier execution
 
@@ -370,8 +400,8 @@ as `{GCP_PID}-agents-data`, reusing the project id already needed for Secret Man
 bucket itself must follow.
 
 **Wire format note:** the Task File's JSON keys are camelCase (`taskId`, `repoURL`,
-`baseBranch`) — the table below uses the `TaskSpec` class's own (snake_case) attribute
-names, which is what `TaskSpec.from_json()` maps them to.
+`issueURL`, `baseBranch`) — the table below uses the `TaskSpec` class's own (snake_case)
+attribute names, which is what `TaskSpec.from_json()` maps them to.
 
 **(Revised 2026-09-03 — cut to four fields.)** `issue_ref`, `branch_name`, `skills_ref`,
 `harness`, `model`, `event_sink`, `event_sink_config` and `timeout_seconds` are all gone
@@ -380,15 +410,50 @@ project doesn't have to make yet — one harness, one model, one sink, no separa
 format, no Skill Pack repo. See [§8](#8-not-doing-and-why) for the field-by-field reasoning
 and [§9](#9-ideas-for-future-versions) for when each comes back.
 
+**Superseded in part, 2026-09-06:** `issue_ref` came back three days later as `issue_url`
+— not as extra configurability, but as the *replacement* for `prompt`. The 2026-09-03
+reasoning held that a free-form `prompt` could reference an issue, so a structured field
+was redundant. That was true and beside the point: the problem was never that `prompt`
+*couldn't* carry an issue, it was that it didn't *have* to. See §8.
+
 | Field | Type | Notes |
 |---|---|---|
 | `task_id` | string | Stable id from the orchestrator. Idempotency key, and must match the Task File's folder name (`coder/{task_id}/task.json`). |
 | `repo_url` | string | HTTPS clone URL. |
-| `prompt` | string | The task, in the orchestrator's own words. May reference an issue, a doc, anything — no format is enforced. |
+| `issue_url` | string | The GitHub issue this run implements. The only thing that varies what the agent is asked to do. |
 | `base_branch` | string | Default `main`. |
 
-`branch_name` is no longer supplied here — the harness derives it from `prompt` once the
-run is underway. See [§3.1](#31-the-run-lifecycle) and OQ-11.
+**(Revised 2026-09-06, issue #5 — `prompt` replaced by `issue_url`.)** `prompt` was a
+free-form string handed straight to the agent CLI, and this section used to describe that
+as a feature: *"the task, in the orchestrator's own words … no format is enforced."* That
+made the container's behaviour a function of prose rather than of a contract — two runs
+of the same shape could do arbitrarily different things, and nothing tied a run to a
+reviewable, addressable unit of work.
+
+The harness prompt is now fixed, built in `Harness.build_prompt()` from a single template
+shared by every harness:
+
+```
+/implement issue {issue_url}
+```
+
+A run is therefore, by construction, the implementation of exactly one GitHub issue. The
+trade-off accepted here: `/implement` is a Claude Code slash command, so one harness's
+vocabulary now sits in the harness-agnostic base class. There is one harness; a second one
+can pull the template down into its own adapter when it arrives.
+
+**This is a hard cut.** `prompt` is not a deprecated fallback — a Task File still carrying
+it is simply a Task File missing `issueURL`, and fails validation like any other.
+
+**Validation is presence-and-non-emptiness only.** `taskId`, `repoURL` and `issueURL` must
+all be present and non-empty. The issue URL's *shape* is not parsed, and it is not checked
+against `repo_url`: a mismatch surfaces immediately anyway, since the agent clones one repo
+and cannot find the issue. Verifying that the issue exists (a `gh issue view` pre-flight
+before cloning) is deliberately not done — see §9.
+
+`branch_name` is not supplied here either, and the runner no longer derives one: the agent
+names the branch after reading its issue. See [§3.1](#31-the-run-lifecycle) — OQ-11 is
+resolved.
 
 ### 4.2 `AgentEvent`
 
@@ -498,8 +563,8 @@ format note in §4.1):**
 | Field (JSON key) | Required | Notes |
 |---|---|---|
 | `task_id` (`taskId`) | yes | Must match the object name. Idempotency key. |
-| `repo_url` (`repoURL`) | yes | *(Not currently enforced by `TaskSpec.from_dict()`'s validation — see Appendix A.)* |
-| `prompt` | yes | |
+| `repo_url` (`repoURL`) | yes | *(Enforcement fixed 2026-09-06 — it is now in `TaskSpec.from_dict()`'s `required` list, so its absence raises the same `ValueError` as any other missing field rather than a raw `KeyError`.)* |
+| `issue_url` (`issueURL`) | yes | The GitHub issue to implement. Replaced `prompt` on 2026-09-06 — see §4.1. Presence-checked only; the URL is not parsed. |
 | `base_branch` (`baseBranch`) | no | default `main` |
 
 No credential is ever baked into the image, and no credential is ever written into a Task
@@ -624,13 +689,13 @@ live.
 | OQ-02 | Does DR's platform support one-shot Jobs? | **Blocked on the Backstage docs (§6.3).** The single fact most likely to change the work-setup recommendation. See A-02. |
 | OQ-03 | Model credential and billing at DR — direct API key or internal gateway? | See A-01. Determines whether `ANTHROPIC_BASE_URL` is optional or mandatory at DR. |
 | OQ-04 | Temporal Cloud pricing floor for personal use | See A-03. Check early — it is cheap to check and expensive to discover late. |
-| OQ-05 | Does the runner own git operations, or the agent? | Direction is decided (runner — §3.1). Open in its details: branch naming scheme, commit trailers, PR body template, and what happens when the agent leaves the tree dirty in an unexpected way. |
+| OQ-05 | Does the runner own git operations, or the agent? | **Direction reversed 2026-09-06 (issue #5): the agent.** It branches, commits, pushes and opens the PR via its skills; the runner clones and supervises (§3.1). Still open, and now *more* open than before: branch naming, commit trailers and PR body template are the model's to choose, and failure attribution — telling "could not solve it" (exit `20`) apart from "push rejected" (exit `30`, §4.5) — has no mechanism at all when both happen inside one agent turn. |
 | OQ-06 | Where does the Skill Pack live? | **Deferred 2026-09-03** — v1 bakes skills into the image, so this doesn't need answering yet. Revisit alongside §3.5 when runtime-selected skills come back. |
 | OQ-07 | Cloud Run Jobs maximum task timeout | **Verify against current GCP documentation rather than assuming.** Determines whether long tasks need chunking. |
 | OQ-08 | What does `/out` carry, and does it survive? | **Resolved 2026-09-03.** Nothing — `/out` is removed. `RunResult` is written to GCS (`task-output.json`, §4.3) instead, which survives the container by construction. |
 | OQ-09 | IAM for the `{GCP_PID}-agents-data` bucket — who reads/writes what? | Dispatcher: write `task.json`, read `task-output.json`. Container: read `task.json`, write `task-output.json` and `trace.json`. A least-privilege split needs specifying before this ships. |
 | OQ-10 | Retention on Task Files and Result Files | Cheap and harmless at personal scale; needs a lifecycle policy before volume or compliance makes it not-harmless. Not urgent for v1. |
-| OQ-11 | How does the harness derive `branch_name`? | A deterministic slug of `prompt` (cheap, same input → same name always) vs. a small model call that summarises the task into a human-friendly name (nicer, non-deterministic, needs its own failure handling). Not yet decided. |
+| ~~OQ-11~~ | ~~How does the harness derive `branch_name`?~~ | **Resolved 2026-09-06 (issue #5): it doesn't.** The agent names the branch after reading its issue (§3.1). Both original candidates are moot — a slug of `prompt` has no `prompt` left to slug (§4.1), and a separate summarisation call is redundant when the agent is already reading the issue. |
 | OQ-12 | Is overwriting `task-output.json` (and now `trace.json`) on retry acceptable? | Since 2026-09-03 both files are keyed by `task_id`, not `run_id` (§4.3, §3.4), so a retried task loses its previous attempt's result *and* trace unless something else preserves them. Candidates if it turns out to matter: a per-run object alongside them, GCS object versioning on the bucket, or accepting the loss. Not urgent until retries are actually implemented. |
 
 ---
@@ -665,7 +730,7 @@ live.
 - **Unpinned `latest` skills** — rejected outright. Non-reproducible and unreviewable.
 - **Resumable sessions, warm pools, fan-out, multi-tenancy** — all deferred to §9. Each
   adds real state to a design whose main virtue is having none.
-- **Structured `issue_ref`, `branch_name`, `skills_ref`, `harness`, `model`,
+- **Structured ~~`issue_ref`~~, `branch_name`, `skills_ref`, `harness`, `model`,
   `event_sink`/`event_sink_config`, `timeout_seconds` as Task File fields** — **removed
   2026-09-03** ([§4.1](#41-taskspec--the-input), [§4.4](#44-environment-variable-contract)).
   None of these are wrong ideas; each just assumes a choice this project doesn't have yet:
@@ -673,6 +738,24 @@ live.
   Skill Pack repo, a per-task timeout anyone could actually tune. Carrying the field before
   the choice exists is speculative configurability, not flexibility. See §9 for when each
   is worth reintroducing.
+
+  **`issue_ref` reinstated 2026-09-06 as `issue_url` (issue #5).** The original argument —
+  a free-form `prompt` can already reference an issue, so a structured field adds nothing —
+  was correct about capability and wrong about constraint. It reasoned about what the field
+  would *let* the dispatcher express, when the value was in what it would *stop* it
+  expressing. Optional structure next to a free-form escape hatch is configurability;
+  structure that *replaces* the escape hatch is a contract. `issue_url` is the second thing,
+  which is why it isn't speculative in the way the rest of that list was: it removes a
+  field rather than adding one, and it makes an entire class of run — an implementation
+  linked to nothing — unrepresentable. See [§4.1](#41-taskspec--the-input).
+
+- **Free-form instructions as the unit of work** — **rejected 2026-09-06.** Whatever the
+  dispatcher wrote into `prompt` is what the agent was told to do, so scope was set by a
+  sentence nobody had to review, and no run could be traced back to a decision. The
+  installed skills (`prepare`, `implement`) already refused to proceed without a GitHub
+  issue, which means the constraint existed only as prose inside a skill; the runner
+  enforced nothing. It is now enforced by the data model. Note what this gives up: a run
+  cannot be dispatched for work too small to be worth an issue. That is the intended cost.
 
 The through-line: this is a stateless, git-only, one-shot container, and nearly everything
 excluded above was excluded because it would have added state.
@@ -702,9 +785,18 @@ excluded above was excluded because it would have added state.
   consumer of Agent Events; `stdout` alone is enough while there's only one.
 - **Per-task `timeout_seconds`.** Revisit once the platform-level Cloud Run Job timeout
   (OQ-07) proves too coarse for some real task.
-- **A richer spec pointer than free-form `prompt`.** If specs routinely live somewhere
-  queryable (issues, a doc system), a structured reference may earn its keep again — only
-  once that pattern is real, not speculative.
+- ~~**A richer spec pointer than free-form `prompt`.**~~ **Done 2026-09-06** — and the
+  "only once that pattern is real" caveat is what tipped it: the pattern *was* real. Every
+  dispatch was already pointing at an issue, and the skills already refused to run without
+  one. See [§4.1](#41-taskspec--the-input) and §8.
+- **Pre-flight validation of `issueURL`.** Parsing the URL's shape, checking its owner/repo
+  against `repo_url`, and confirming via `gh issue view` that the issue exists — all before
+  the clone, so a dispatcher bug costs no tokens. Deliberately skipped in the first cut
+  (issue #5): a bad URL already fails fast, just later and less legibly. Worth revisiting
+  once a bad Task File has actually cost a run.
+- **A spec pointer that isn't a GitHub issue.** `issue_url` hard-codes one issue tracker
+  into the data model, which is fine while §3.6's "GitHub cloud on both sides" holds. If it
+  stops holding, this becomes the field to generalise.
 
 ---
 
@@ -717,11 +809,13 @@ document is actionable rather than aspirational.
 |---|---|---|
 | `runner/harness/harness.py` | `Harness` protocol has only `build_command()`. It abstracts *launching* a CLI but not *reading* one. | A `parse()` counterpart producing `AgentEvent`s (§3.4, §4.2). |
 | `runner/main.py:17-25` | Parses Claude Code's `stream-json` shape inline — `type == "assistant"`, `message.content[0]`, `thinking`/`text`. | Move into the Claude adapter. This is the leak `parse()` fixes; pointing the runner at another CLI today breaks it. |
-| `runner/main.py` | **Done (2026-09-03).** `resolve_task()` reads `TASK_ID`, derives the bucket from `GCP_PID`, fetches `coder/{task_id}/task.json` via `runner/gcp_storage.py`, and builds the harness command from `task.prompt`. `run_command()` is also given the `trace.json` destination (§3.4). | Still missing: clone, branch, skills, commit, push, PR, `RunResult` — the rest of the lifecycle in §3.1. |
+| `runner/main.py` | **Done (2026-09-03).** `resolve_task()` reads `TASK_ID`, derives the bucket from `GCP_PID`, fetches `coder/{task_id}/task.json` via `runner/gcp_storage.py`, and builds the harness command from the fixed `/implement issue <issueURL>` prompt (2026-09-06, issue #5 — previously from a free-form `task.prompt`). `run_command()` is also given the `trace.json` destination (§3.4). | Still missing: clone, branch, skills, commit, push, PR, `RunResult` — the rest of the lifecycle in §3.1. |
+| `runner/harness/harness.py` | **Done (2026-09-06, issue #5).** `build_prompt()` builds the one prompt this container can issue, `/implement issue <issueURL>`, from a template in the base class shared by every harness (§4.1). `build_command()`'s signature is unchanged. Covered by `tests/harness/test_harness.py`. | A second harness may want to phrase this differently — at which point the template moves down into each adapter. |
 | `runner/harness/harness.py` | **Done (2026-09-03).** `run_command()` collects every raw stdout line and, best-effort, uploads it as `trace.json` (§3.4). Also now tolerant of a non-JSON stdout line (previously an unhandled `json.JSONDecodeError` would crash the whole run). | The rest of `parse()` → `AgentEvent` (§4.2) is still unbuilt — `trace.json` is a stand-in, not that. |
 | — | No `RunResult`, no exit code taxonomy, no `task-output.json` write. | §4.3 and §4.5. |
-| `runner/model/task.py` | **Done, then revised again outside this doc pass.** `TaskSpec.from_json()` / `from_dict()` parse `task_id`, `repo_url`, `prompt`, `base_branch` from camelCase JSON keys (§4.1). **Inconsistency to fix:** `repo_url` is read via `task_details["repoURL"]` — unconditional indexing, not `.get()` — so a Task File missing `repoURL` raises a raw `KeyError` instead of the same clean `ValueError` every other required field gets. | Add `repoURL` to the validated `required` list alongside `taskId`/`prompt`. |
+| `runner/model/task.py` | **Done (2026-09-06, issue #5).** `TaskSpec.from_json()` / `from_dict()` parse `task_id`, `repo_url`, `issue_url`, `base_branch` from camelCase JSON keys (§4.1). `prompt` is gone; `issueURL` replaces it. `required` is now `taskId`/`repoURL`/`issueURL`, which also closes the `KeyError` inconsistency this row used to flag — `repoURL`'s absence raises the same clean `ValueError` as every other missing field. Covered by `tests/model/test_task.py`. | — |
 | `runner/gcp_storage.py` | **Done (2026-09-03).** `get_object()` and `put_object()`, mirroring `gcp_secrets.py`. | — |
+| `runner/git/gitops.py` | `push_branch()` and `create_pull_request()` exist but are called from nowhere; there is no `checkout -b` anywhere in the runner. | **Intentional as of 2026-09-06** — the agent owns git (§3.1). Kept unused rather than deleted, so taking git back into the runner later doesn't mean rewriting them. |
 | `Dockerfile` | Creates `/workspace /task /out`. | `/workspace` stays. `/task` and `/out` are both removed: `/out` per OQ-08 (resolved — `RunResult` goes to GCS); `/task` was already unused and stays unused now that the Task File is resolved from GCS, not a mounted path. |
 | `Dockerfile` | Commented-out `gcloud` install. | Remove the commented CLI install — GCS access is via the `google-cloud-storage` Python client, not the `gcloud` CLI (see §8). |
 | `Dockerfile` | No `gh` CLI. | Needed for the lifecycle in §3.1. A Skill Pack fetch step is **not** needed for v1 — skills are baked into the image (§3.5). |
