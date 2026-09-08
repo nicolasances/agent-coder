@@ -19,8 +19,8 @@ env:
   # OOMs, this is the first knob, and per docs/concept.md §3.2 the vCPU-minutes
   # are noise next to the tokens a run spends. Note that Cloud Run pairs memory
   # with CPU: past 4Gi it requires more than 1 CPU, so raise both together.
-  JOB_MEMORY: '2Gi'
-  JOB_CPU: '1'
+  JOB_MEMORY: '4Gi'
+  JOB_CPU: '2'
 
 jobs:
   build-and-deploy:
