@@ -235,7 +235,14 @@ buys nothing.
 What the container needs from any platform is short enough to enumerate:
 
 1. Outbound network — to GitHub, to the model endpoint, and to GCS.
-2. An ephemeral writable disk for `/workspace`.
+2. An ephemeral writable disk for `/workspace` — sized for the largest repo, not the
+   average one. *(Revised 2026-09-08.)* On Cloud Run this is **not** a disk: the container
+   filesystem is in-memory, so the clone is charged against the job's memory limit
+   alongside the agent CLI itself, and the default 512Mi limit OOMs on a repo the size of
+   `nicolasances/tome`. The job is therefore deployed at 2Gi/1 CPU
+   (`.github/workflows/release-dev.yml`). Kubernetes gives `/workspace` a real
+   `emptyDir`, where the same requirement is a volume size rather than a memory request —
+   the contract is unchanged, the way each platform satisfies it is not.
 3. Secrets injected as environment variables at execution time.
 4. Read/write access to one GCS bucket, for the Task File and the Result File.
 
