@@ -1,6 +1,6 @@
 {
-    "taskId": "test-task-001", 
-    "repoURL": "https://github.com/nicolasances/tome.git", 
-    "prompt": "Describe in one sentence what this repo is about.", 
+    "taskId": "test-task-002",
+    "repoURL": "https://github.com/nicolasances/agent-coder.git",
+    "issueURL": "https://github.com/nicolasances/agent-coder/issues/3",
     "baseBranch": "main"
 }

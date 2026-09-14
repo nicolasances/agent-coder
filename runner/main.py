@@ -1,7 +1,8 @@
 import os
 
-from runner.config.runner import RunnerConfig
 from runner.gcp_storage import get_object
+from runner.git.gitops import GitOps
+from runner.harness.harness import HarnessInit
 from runner.model.task import TaskSpec
 
 from .harness.claude import Claude
@@ -11,14 +12,11 @@ from .harness.claude import Claude
 # Layout: gs://{GCP_PID}-agents-data/coder/{TASK_ID}/task.json (docs/concept.md §4.1, §4.4).
 AGENT_NAME = "coder"
 
-
-def task_bucket() -> str:
-    return f"{os.environ.get('GCP_PID')}-agents-data"
-
-
 def task_object_path(task_id: str, filename: str) -> str:
     return f"{AGENT_NAME}/{task_id}/{filename}"
 
+def agent_bucket() -> str:
+    return f"{os.environ.get('GCP_PID')}-agents-data"
 
 def resolve_task() -> TaskSpec:
     """Resolve the TaskSpec for this run from its Task File in GCS."""
@@ -28,27 +26,39 @@ def resolve_task() -> TaskSpec:
     if not task_id:
         raise ValueError("TASK_ID is not set.")
 
-    task_json = get_object(task_bucket(), task_object_path(task_id, "task.json"))
+    task_json = get_object(agent_bucket(), task_object_path(task_id, "task.json"))
 
     return TaskSpec.from_json(task_json)
+
+def harness_init() -> HarnessInit: 
+
+    task_id= os.environ.get("TASK_ID")
+
+    if not task_id:
+        raise ValueError("TASK_ID is not set.")
+
+    return HarnessInit(
+        agent_data_bucket=agent_bucket(),
+        trace_object_path=task_object_path(task_id, "trace.json"),
+    )
 
 
 def main() -> int:
 
-    harness = Claude()
 
-    # 1. Load runner config (secrets)
-    RunnerConfig.get_config(harness)
+    # 1. Load the harness
+    harness = Claude().initialize(harness_init())
 
-    # 2. Resolve the task from its Task File in GCS
+    # 3. Resolve the task from its Task File in GCS
     task = resolve_task()
 
-    # 3. Build and run the command, tracing every stdout line to GCS
-    return harness.run_command(
-        harness.build_command(task.prompt, model="sonnet"),
-        trace_bucket=task_bucket(),
-        trace_object=task_object_path(task.task_id, "trace.json"),
-    )
+    # 4. Clone the repo
+    git_ops = GitOps(repoURL=task.repo_url, branch=task.base_branch)
+
+    git_ops.clone_repo()
+
+    # 5. Build and run the command in the cloned repo, tracing every stdout line to GCS
+    return harness.run_task(task, workdir=git_ops.local_path)
 
 
 if __name__ == "__main__":
