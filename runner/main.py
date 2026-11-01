@@ -45,7 +45,6 @@ def harness_init() -> HarnessInit:
 
 def main() -> int:
 
-
     # 1. Load the harness
     harness = Claude().initialize(harness_init())
 
