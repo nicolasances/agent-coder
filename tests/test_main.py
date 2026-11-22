@@ -1,0 +1,143 @@
+import json
+
+from runner.exit_codes import EXIT_INFRA_FAILURE, EXIT_OK, EXIT_TASK_FAILED, EXIT_TIMEOUT
+from runner.main import parse_task_id, run_queued
+
+
+class FakeReceived:
+    def __init__(self, data: str):
+        self.data = data
+
+
+class FakeQueue:
+    def __init__(self, received: FakeReceived | None):
+        self.received = received
+        self.acked = 0
+        self.nacked = 0
+
+    def pull_one(self):
+        return self.received
+
+    def ack(self) -> bool:
+        self.acked += 1
+
+        return True
+
+    def nack(self) -> bool:
+        self.nacked += 1
+
+        return True
+
+
+def test_parse_task_id_reads_task_id_from_the_message_body():
+    assert parse_task_id(json.dumps({"taskId": "t-42"})) == "t-42"
+
+
+def test_parse_task_id_rejects_a_body_without_task_id():
+    try:
+        parse_task_id("{}")
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_parse_task_id_rejects_non_json():
+    try:
+        parse_task_id("not json")
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_empty_pull_exits_zero_without_running_anything():
+    queue = FakeQueue(None)
+    executed = []
+
+    code = run_queued(queue, lambda task_id: executed.append(task_id) or EXIT_OK)
+
+    assert code == EXIT_OK
+    assert executed == []
+    assert queue.acked == 0 and queue.nacked == 0
+
+
+def test_successful_run_acks_the_message():
+    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+
+    code = run_queued(queue, lambda task_id: EXIT_OK)
+
+    assert code == EXIT_OK
+    assert queue.acked == 1 and queue.nacked == 0
+
+
+def test_the_task_id_from_the_message_is_what_gets_executed():
+    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+    executed = []
+
+    run_queued(queue, lambda task_id: executed.append(task_id) or EXIT_OK)
+
+    assert executed == ["t1"]
+
+
+def test_task_failure_is_acked_so_it_is_not_retried():
+    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+
+    code = run_queued(queue, lambda task_id: EXIT_TASK_FAILED)
+
+    assert code == EXIT_TASK_FAILED
+    assert queue.acked == 1 and queue.nacked == 0
+
+
+def test_timeout_is_acked():
+    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+
+    code = run_queued(queue, lambda task_id: EXIT_TIMEOUT)
+
+    assert code == EXIT_TIMEOUT
+    assert queue.acked == 1 and queue.nacked == 0
+
+
+def test_infra_failure_exit_code_is_nacked_for_retry():
+    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+
+    code = run_queued(queue, lambda task_id: EXIT_INFRA_FAILURE)
+
+    assert code == EXIT_INFRA_FAILURE
+    assert queue.nacked == 1 and queue.acked == 0
+
+
+def test_an_exception_while_executing_becomes_an_infra_failure_and_is_nacked():
+    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+
+    def explode(task_id: str) -> int:
+        raise RuntimeError("clone failed")
+
+    code = run_queued(queue, explode)
+
+    assert code == EXIT_INFRA_FAILURE
+    assert queue.nacked == 1 and queue.acked == 0
+
+
+def test_a_malformed_message_is_acked_as_task_failed_because_retrying_cannot_fix_it():
+    queue = FakeQueue(FakeReceived("garbage"))
+    executed = []
+
+    code = run_queued(queue, lambda task_id: executed.append(task_id) or EXIT_OK)
+
+    assert code == EXIT_TASK_FAILED
+    assert executed == []
+    assert queue.acked == 1 and queue.nacked == 0
+
+
+def test_local_mode_maps_an_exception_to_an_infra_failure_exit_code():
+    from runner.main import run_local
+
+    def explode(task_id: str) -> int:
+        raise RuntimeError("secret manager unreachable")
+
+    assert run_local("t1", explode) == EXIT_INFRA_FAILURE
+
+
+def test_local_mode_returns_the_exit_code_of_the_run():
+    from runner.main import run_local
+
+    assert run_local("t1", lambda task_id: EXIT_TASK_FAILED) == EXIT_TASK_FAILED
