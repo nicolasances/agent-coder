@@ -4,6 +4,7 @@ from runner.gcp_storage import get_object
 from runner.git.gitops import GitOps
 from runner.harness.harness import HarnessInit
 from runner.model.task import TaskSpec
+from runner.skills import SkillsInstallError, install_skills
 
 from .harness.claude import Claude
 
@@ -11,6 +12,9 @@ from .harness.claude import Claude
 # configurable — it names *this* repo, not a per-deployment choice.
 # Layout: gs://{GCP_PID}-agents-data/coder/{TASK_ID}/task.json (docs/concept.md §4.1, §4.4).
 AGENT_NAME = "coder"
+
+# Infra failure — retryable (docs/concept.md §4.5).
+EXIT_INFRA_FAILURE = 30
 
 def task_object_path(task_id: str, filename: str) -> str:
     return f"{AGENT_NAME}/{task_id}/{filename}"
@@ -44,6 +48,14 @@ def harness_init() -> HarnessInit:
 
 
 def main() -> int:
+
+    # 0. Install the latest skills. Without them the agent must not start: /implement etc. would be missing.
+    try:
+        install_skills()
+    except SkillsInstallError as e:
+        print(e)
+
+        return EXIT_INFRA_FAILURE
 
     # 1. Load the harness
     harness = Claude().initialize(harness_init())
