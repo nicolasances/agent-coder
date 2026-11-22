@@ -14,4 +14,4 @@ is gone.
 ## Where
 - `runner/harness/harness.py` — `_trace_entry()`, `_write_trace()`
 - `runner/gcp_storage.py` — `put_object()`
-- Design: [`concept.md` §3.4](../concept.md#34-observability)
+- Design: [`concept.md` §3.4](../concept.md#34-observability--the-chatty-agent)
