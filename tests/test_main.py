@@ -14,6 +14,12 @@ class FakeQueue:
         self.received = received
         self.acked = 0
         self.nacked = 0
+        self.extended = 0
+
+    def extend(self) -> bool:
+        self.extended += 1
+
+        return True
 
     def pull_one(self):
         return self.received
@@ -141,3 +147,46 @@ def test_local_mode_returns_the_exit_code_of_the_run():
     from runner.main import run_local
 
     assert run_local("t1", lambda task_id: EXIT_TASK_FAILED) == EXIT_TASK_FAILED
+
+
+def test_the_lease_is_extended_while_the_task_runs():
+    import time
+
+    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+
+    def slow_run(task_id: str) -> int:
+        time.sleep(0.2)
+
+        return EXIT_OK
+
+    run_queued(queue, slow_run, heartbeat_interval_seconds=0.02)
+
+    assert queue.extended >= 2
+
+
+def test_the_lease_stops_being_extended_once_the_task_is_settled():
+    import time
+
+    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+
+    run_queued(queue, lambda task_id: EXIT_OK, heartbeat_interval_seconds=0.02)
+    extended_at_settle = queue.extended
+    time.sleep(0.1)
+
+    assert queue.extended == extended_at_settle
+
+
+def test_task_timeout_defaults_to_three_hours(monkeypatch):
+    from runner.main import task_timeout_seconds
+
+    monkeypatch.delenv("TASK_TIMEOUT_SECONDS", raising=False)
+
+    assert task_timeout_seconds() == 10800
+
+
+def test_task_timeout_can_be_overridden_by_the_environment(monkeypatch):
+    from runner.main import task_timeout_seconds
+
+    monkeypatch.setenv("TASK_TIMEOUT_SECONDS", "120")
+
+    assert task_timeout_seconds() == 120

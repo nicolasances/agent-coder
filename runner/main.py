@@ -5,7 +5,9 @@ from typing import Callable
 from runner.exit_codes import EXIT_INFRA_FAILURE, EXIT_OK, EXIT_TASK_FAILED, map_harness_exit, should_nack
 from runner.gcp_storage import get_object
 from runner.git.gitops import GitOps
-from runner.harness.harness import HarnessInit
+from runner.git.pr_check import gh_runner, open_pr_exists_for_issue
+from runner.harness.harness import SECRET_NAME_CODING_AGENT_GH_TOKEN, HarnessInit
+from runner.lease import HEARTBEAT_INTERVAL_SECONDS, LeaseHeartbeat
 from runner.model.task import TaskSpec
 from runner.pubsub.task_queue import TaskQueue
 from runner.shutdown import SigtermGuard
@@ -16,6 +18,12 @@ from .harness.claude import Claude
 # configurable — it names *this* repo, not a per-deployment choice.
 # Layout: gs://{GCP_PID}-agents-data/coder/{taskId}/task.json (docs/concept.md §4.1, §4.4).
 AGENT_NAME = "coder"
+
+# Internal bound on one run (US-05). Kubernetes' activeDeadlineSeconds (3h15m) is only the backstop.
+DEFAULT_TASK_TIMEOUT_SECONDS = 10800
+
+def task_timeout_seconds() -> int:
+    return int(os.environ.get("TASK_TIMEOUT_SECONDS", DEFAULT_TASK_TIMEOUT_SECONDS))
 
 def task_object_path(task_id: str, filename: str) -> str:
     return f"{AGENT_NAME}/{task_id}/{filename}"
@@ -68,13 +76,19 @@ def execute_task(task_id: str, guard: SigtermGuard | None = None) -> int:
     # 2. Resolve the task from its Task File in GCS
     task = resolve_task(task_id)
 
-    # 3. Clone the repo
+    # 3. Idempotency: a redelivered message must not start a second 3 hour run for the same issue
+    if open_pr_exists_for_issue(task.issue_url, gh_runner(harness.secrets[SECRET_NAME_CODING_AGENT_GH_TOKEN])):
+        print(f"An open PR already exists for {task.issue_url}: skipping the run.", flush=True)
+
+        return EXIT_OK
+
+    # 4. Clone the repo
     git_ops = GitOps(repoURL=task.repo_url, branch=task.base_branch)
 
     git_ops.clone_repo()
 
-    # 4. Build and run the command in the cloned repo, tracing every stdout line to GCS
-    return map_harness_exit(harness.run_task(task, workdir=git_ops.local_path))
+    # 5. Build and run the command in the cloned repo, tracing every stdout line to GCS
+    return map_harness_exit(harness.run_task(task, workdir=git_ops.local_path, timeout_seconds=task_timeout_seconds()))
 
 def run_local(task_id: str, execute: Callable[[str], int]) -> int:
     """Run one task with no queue: same exit-code mapping, nothing to ack."""
@@ -86,7 +100,7 @@ def run_local(task_id: str, execute: Callable[[str], int]) -> int:
 
         return EXIT_INFRA_FAILURE
 
-def run_queued(queue: TaskQueue, execute: Callable[[str], int]) -> int:
+def run_queued(queue: TaskQueue, execute: Callable[[str], int], heartbeat_interval_seconds: float = HEARTBEAT_INTERVAL_SECONDS) -> int:
     """Pull one task, run it, and ack or nack the message by outcome."""
 
     received = queue.pull_one()
@@ -105,11 +119,17 @@ def run_queued(queue: TaskQueue, execute: Callable[[str], int]) -> int:
 
         return EXIT_TASK_FAILED
 
+    # A run outlives Pub/Sub's 600s ack-deadline cap, so keep the lease alive until it ends.
+    heartbeat = LeaseHeartbeat(queue.extend, heartbeat_interval_seconds)
+    heartbeat.start()
+
     try:
         exit_code = execute(task_id)
     except Exception as e:
         print(f"Infra failure while running task '{task_id}': {e}", flush=True)
         exit_code = EXIT_INFRA_FAILURE
+    finally:
+        heartbeat.stop()
 
     if should_nack(exit_code):
         queue.nack()
