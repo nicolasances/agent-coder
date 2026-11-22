@@ -190,3 +190,38 @@ def test_task_timeout_can_be_overridden_by_the_environment(monkeypatch):
     monkeypatch.setenv("TASK_TIMEOUT_SECONDS", "120")
 
     assert task_timeout_seconds() == 120
+
+
+# --- Skills are installed before anything else runs (docs/features/skills-at-startup.md) ---
+
+def test_execute_task_exits_30_and_never_starts_the_agent_when_skills_install_fails():
+    from unittest.mock import patch
+
+    from runner import main as runner_main
+    from runner.skills import SkillsInstallError
+
+    with patch.object(runner_main, "install_skills", side_effect=SkillsInstallError("boom")), patch.object(runner_main, "Claude") as mock_claude, patch.object(runner_main, "resolve_task") as mock_resolve_task, patch.object(runner_main, "GitOps") as mock_git_ops:
+        exit_code = runner_main.execute_task("t1")
+
+    assert exit_code == EXIT_INFRA_FAILURE
+    mock_claude.assert_not_called()
+    mock_resolve_task.assert_not_called()
+    mock_git_ops.assert_not_called()
+
+
+def test_execute_task_installs_skills_before_running_the_harness():
+    from unittest.mock import MagicMock, patch
+
+    from runner import main as runner_main
+
+    calls = []
+    harness = MagicMock()
+    harness.run_task.side_effect = lambda *a, **k: calls.append("run_task") or 0
+
+    with patch.object(runner_main, "install_skills", side_effect=lambda: calls.append("install_skills")), patch.object(runner_main, "Claude") as mock_claude, patch.object(runner_main, "harness_init"), patch.object(runner_main, "resolve_task"), patch.object(runner_main, "GitOps"), patch.object(runner_main, "gh_runner"), patch.object(runner_main, "open_pr_exists_for_issue", return_value=False):
+        mock_claude.return_value.initialize.return_value = harness
+
+        exit_code = runner_main.execute_task("t1")
+
+    assert exit_code == EXIT_OK
+    assert calls == ["install_skills", "run_task"]

@@ -10,7 +10,8 @@ pushes, opens a PR, and terminates. It holds no state between runs — the branc
 is the artifact.
 
 For the full design and rationale behind these decisions, see
-[`docs/concept.md`](docs/concept.md).
+[`docs/concept.md`](docs/concept.md). For what the service does, feature by feature, see
+[`docs/features/`](docs/features/README.md).
 
 ## Table of Contents
 
@@ -28,13 +29,14 @@ For the full design and rationale behind these decisions, see
 Given a task, the container:
 
 1. Pulls one task from Pub/Sub (or takes `TASK_ID` from the environment, in local mode)
-2. Resolves the task (from a Task File in GCS)
-3. Skips the run if an open PR for the issue already exists
-4. Clones the repository
-5. Runs the agent CLI against the working tree, with a fixed prompt: `/implement issue <issueURL>`
-6. Acks or nacks the message by outcome, and exits with the matching exit code
+2. Installs the latest coding skills from `nicolasances/skills-coding`
+3. Resolves the task (from a Task File in GCS)
+4. Skips the run if an open PR for the issue already exists
+5. Clones the repository
+6. Runs the agent CLI against the working tree, with a fixed prompt: `/implement issue <issueURL>`
+7. Acks or nacks the message by outcome, and exits with the matching exit code
 
-The agent in step 3 does the rest itself, through its skills: reads the issue, creates a
+The agent in step 6 does the rest itself, through its skills: reads the issue, creates a
 branch named after it, edits, commits, pushes, and opens the pull request. See
 [`docs/concept.md` §3.1](docs/concept.md#31-the-run-lifecycle) for why the split falls
 there.

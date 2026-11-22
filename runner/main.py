@@ -11,6 +11,7 @@ from runner.lease import HEARTBEAT_INTERVAL_SECONDS, LeaseHeartbeat
 from runner.model.task import TaskSpec
 from runner.pubsub.task_queue import TaskQueue
 from runner.shutdown import SigtermGuard
+from runner.skills import SkillsInstallError, install_skills
 
 from .harness.claude import Claude
 
@@ -66,6 +67,14 @@ def execute_task(task_id: str, guard: SigtermGuard | None = None) -> int:
     Any exception raised here (GCS, Secret Manager, clone, ...) is an infra failure;
     the caller maps it to exit 30.
     """
+
+    # 0. Install the latest skills. Without them the agent must not start: /implement etc. would be missing.
+    try:
+        install_skills()
+    except SkillsInstallError as e:
+        print(e)
+
+        return EXIT_INFRA_FAILURE
 
     # 1. Load the harness
     harness = Claude().initialize(harness_init(task_id))
