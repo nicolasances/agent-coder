@@ -92,3 +92,100 @@ def test_run_task_returns_the_subprocess_exit_code():
         exit_code = harness.run_task(a_task())
 
     assert exit_code == 20
+
+
+class StoppableProc:
+    """A fake child process that records terminate/kill and can refuse to die."""
+
+    def __init__(self, dies_on_terminate: bool = True, already_exited: bool = False):
+        self.dies_on_terminate = dies_on_terminate
+        self.already_exited = already_exited
+        self.terminated = False
+        self.killed = False
+
+    def poll(self):
+        return 0 if self.already_exited else None
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        import subprocess
+
+        if not self.dies_on_terminate and not self.killed:
+            raise subprocess.TimeoutExpired("fake", timeout or 0)
+
+        return -15
+
+
+def test_stop_terminates_the_running_agent_process():
+    harness = RecordingHarness()
+    proc = StoppableProc()
+    harness._proc = proc
+
+    harness.stop()
+
+    assert proc.terminated is True
+    assert proc.killed is False
+
+
+def test_stop_kills_an_agent_process_that_ignores_terminate():
+    harness = RecordingHarness()
+    proc = StoppableProc(dies_on_terminate=False)
+    harness._proc = proc
+
+    harness.stop()
+
+    assert proc.killed is True
+
+
+def test_stop_does_nothing_when_no_process_is_running():
+    harness = RecordingHarness()
+
+    harness.stop()
+
+
+def test_stop_does_nothing_when_the_process_already_exited():
+    harness = RecordingHarness()
+    proc = StoppableProc(already_exited=True)
+    harness._proc = proc
+
+    harness.stop()
+
+    assert proc.terminated is False
+
+
+def test_run_task_returns_timeout_exit_code_and_stops_the_agent_when_time_runs_out():
+    harness = an_initialized_harness()
+    harness.build_command = lambda prompt, model: ["sleep", "30"]  # type: ignore[method-assign]
+
+    with patch("runner.harness.harness.put_object"):
+        started = __import__("time").monotonic()
+        exit_code = harness.run_task(a_task(), timeout_seconds=0.3)
+        elapsed = __import__("time").monotonic() - started
+
+    assert exit_code == 40
+    assert elapsed < 10
+
+
+def test_run_task_still_writes_the_trace_after_a_timeout():
+    harness = an_initialized_harness()
+    harness.build_command = lambda prompt, model: ["sleep", "30"]  # type: ignore[method-assign]
+
+    with patch("runner.harness.harness.put_object") as mock_put:
+        harness.run_task(a_task(), timeout_seconds=0.3)
+
+    assert mock_put.call_count == 1
+
+
+def test_run_task_does_not_report_a_timeout_when_the_agent_finishes_in_time():
+    harness = an_initialized_harness()
+    harness.build_command = lambda prompt, model: ["true"]  # type: ignore[method-assign]
+
+    with patch("runner.harness.harness.put_object"):
+        exit_code = harness.run_task(a_task(), timeout_seconds=30)
+
+    assert exit_code == 0

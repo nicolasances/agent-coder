@@ -1,5 +1,11 @@
 # Coding Agent — Concept
 
+> **Update 2026-11-22 (issue #8):** the container now runs as a KEDA `ScaledJob` on GKE,
+> pulls its task from Pub/Sub, and the exit code in §4.5 drives ack/nack. Cloud Run Jobs
+> and the dispatcher's per-execution overrides are superseded; see §4.4 and §4.5 and
+> [architecture.md](architecture.md#runtime-keda-scaledjob-on-gke). Where older text below
+> still says Cloud Run, this note wins.
+>
 > Status: concept / decision document. Parts of it are now implemented — see
 > [Appendix A](#appendix-a--current-repo-state-vs-target) for exactly which.
 > Last revised: 2026-09-06. The Task File's free-form `prompt` is replaced by a required
@@ -536,6 +542,14 @@ can be re-created exactly from those three values.
 
 ### 4.4 Environment variable contract
 
+**(Revised 2026-11-22, issue #8 — GKE + Pub/Sub.)** `TASK_ID` is no longer the way a task
+reaches the container in production: KEDA starts the pod but does not pass it the message,
+so the pod pulls one message from Pub/Sub (body `{"taskId": "<id>"}`) and uses that id.
+`TASK_ID` remains as **local mode** (US-04): if set, Pub/Sub is skipped entirely. New
+variables: `PUBSUB_PROJECT_ID` (the GKE project, not necessarily `GCP_PID`),
+`PUBSUB_SUBSCRIPTION`, and `TASK_TIMEOUT_SECONDS` (default `10800`, US-05). The paragraphs
+below describe the earlier Cloud Run override model.
+
 **(Revised 2026-09-03.)** Per-task fields no longer travel as individual environment
 variables — they live in the Task File ([§4.1](#41-taskspec--the-input)), a JSON object in
 GCS. What crosses the environment-variable boundary now splits into two kinds, and the
@@ -608,6 +622,26 @@ failures that are worth retrying and failures that are not.
 
 Collapsing `20` and `30` into a single non-zero code is the mistake this table exists to
 prevent. They demand opposite responses.
+
+**(Revised 2026-11-22, issue #8 — the code now drives Pub/Sub ack/nack.)** There is no
+Temporal retry policy; the retry decision is the nack:
+
+| Outcome | Exit code | Pub/Sub |
+|---|---|---|
+| PR opened, or an open PR for the issue already exists | `0` | ack |
+| No change needed | `10` | ack |
+| Task failed | `20` | ack |
+| Validation failed | `21` | ack |
+| Infra failure | `30` | **nack** (retried, capped by the dead-letter limit) |
+| Timeout (`TASK_TIMEOUT_SECONDS`) | `40` | ack |
+| Crash / OOM / eviction | n/a | lease expires, retried |
+| SIGTERM | `143` | nack immediately, agent stopped |
+
+Implementation notes: any exception in the runner (GCS, Secret Manager, clone, push) maps
+to `30`. A non-zero code from the agent CLI outside the taxonomy maps to `20`, because the
+CLI cannot distinguish "could not solve it" from "model unreachable" (so a model outage is
+currently acked rather than retried: a known gap). Because a run can last 3 hours, past
+Pub/Sub's 600s ack-deadline cap, a background heartbeat extends the lease every 5 minutes.
 
 ---
 

@@ -2,12 +2,17 @@ from abc import ABC, abstractmethod
 import json
 import os
 import subprocess
+import threading
 
 from runner.gcp_storage import put_object
+from runner.exit_codes import EXIT_TIMEOUT
 from runner.model.task import TaskSpec
 from runner.gcp_secrets import get_secret
 
 SECRET_NAME_CODING_AGENT_GH_TOKEN = "coding-agent-gh-token"
+
+# How long stop() waits for the agent to exit after SIGTERM before it SIGKILLs it.
+STOP_GRACE_SECONDS = 10
 
 # The one and only prompt this container ever issues (docs/concept.md §4.1, issue #5).
 # A run implements exactly one GitHub issue: the only thing that varies between runs is
@@ -25,6 +30,7 @@ class HarnessInit:
 class Harness(ABC):
 
     initialized: bool = False
+    _proc: subprocess.Popen | None = None
     harness_config: HarnessInit
     base_secrets = [
         SECRET_NAME_CODING_AGENT_GH_TOKEN
@@ -103,7 +109,7 @@ class Harness(ABC):
 
         return PROMPT_TEMPLATE.format(issue_url=task.issue_url)
 
-    def run_task(self, task: TaskSpec, workdir: str | None = None) -> int:
+    def run_task(self, task: TaskSpec, workdir: str | None = None, timeout_seconds: float | None = None) -> int:
         """Run the task in a subprocess, streaming output to stdout and
         collecting every raw stdout line into a trace.
 
@@ -114,6 +120,9 @@ class Harness(ABC):
         runner's own working directory is never touched. Left as None for
         callers with no repo to operate on (e.g. tests), matching Popen's own
         default of inheriting the caller's cwd.
+
+        If timeout_seconds is given and elapses first, the agent subprocess is stopped
+        and EXIT_TIMEOUT is returned (the trace collected so far is still written).
 
         If trace_bucket and trace_object are given, the trace is uploaded to
         GCS as a JSON array once the process exits. Writing the trace is
@@ -137,10 +146,18 @@ class Harness(ABC):
         command = self.build_command(self.build_prompt(task), self.model)
 
         trace: list = []
+        timed_out = threading.Event()
+        timer: threading.Timer | None = None
 
         try:
             # Start the process
             proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=workdir)
+            self._proc = proc
+
+            if timeout_seconds is not None:
+                timer = threading.Timer(timeout_seconds, lambda: (timed_out.set(), self.stop()))
+                timer.daemon = True
+                timer.start()
 
             with proc.stdout as stdout: # type: ignore
 
@@ -158,10 +175,37 @@ class Harness(ABC):
             print(f"Error output: {e.stderr}")
             exit_code = e.returncode
 
+        finally:
+            if timer is not None:
+                timer.cancel()
+
         # Write the trace to the target bucket
         self._write_trace(trace, self.harness_config.agent_data_bucket, self.harness_config.trace_object_path)
 
+        if timed_out.is_set():
+            print(f"Task timed out after {timeout_seconds}s: the agent was stopped.", flush=True)
+
+            return EXIT_TIMEOUT
+
         return exit_code
+
+    def stop(self) -> None:
+        """Stop the running agent subprocess: SIGTERM, then SIGKILL if it ignores it.
+
+        Safe to call from a signal handler or another thread, and when nothing is running.
+        """
+
+        proc = self._proc
+
+        if proc is None or proc.poll() is not None:
+            return
+
+        proc.terminate()
+
+        try:
+            proc.wait(timeout=STOP_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
     @staticmethod
     def _trace_entry(stdout_line: str) -> dict:
