@@ -11,7 +11,7 @@ env:
   PROJECT_ID: totoexperiments
   REGION:  europe-west1
   PACKAGE_NAME: 'agent-coder'
-  PACKAGE_VERSION: '0.1.0'
+  PACKAGE_VERSION: '0.1.1'
   # Sized for the largest repo we run against, not the average one: Cloud Run's
   # container filesystem is in-memory, so the /workspace clone counts against
   # this number on top of the agent CLI's own footprint. 2Gi is a step up from

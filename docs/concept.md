@@ -355,14 +355,25 @@ contract, different config*, which is exactly the principle in [§3.3](#33-porta
 pack into the image is the documented retreat. It is more rigid, not wrong. What is
 rejected outright is fetching an unpinned `latest`.
 
-**v1 (revised 2026-09-03): the fallback is the starting point.** Skills are baked into the
-image — the "Baked into image" column above, not "Pinned ref at startup." There is no
-Skill Pack repo yet, and no second environment yet to justify runtime selection.
-`skills_ref` is removed from the Task File accordingly ([§4.1](#41-taskspec--the-input),
-[§4.4](#44-environment-variable-contract)); `SKILLS_REPO_URL` is removed too, since there
-is nothing to fetch. This is a deferral, not a reversal of the argument above: the day a
-real Skill Pack exists and needs to roll back independently of the image, the pinned-ref
-design in this section is what to build, unchanged.
+**v1 (revised 2026-11-22, issue #10): latest at startup.** This supersedes the 2026-09-03
+decision to bake skills into the image, and it **reverses the rejection of unpinned
+`latest`** above. Baking skills in meant a push to the Skill Pack repo never reached the
+agent until the image was rebuilt, and the build-time install was a cached Docker layer
+that stayed stale even across rebuilds. The runner now runs
+`npx skills add nicolasances/skills-coding --global -y` at every container start, before
+the harness is launched (`runner/skills.py`). It takes the repo's default branch, `main`.
+The repo is public, so no credential is needed, only outbound access to GitHub.
+
+If the install fails the run exits `30` ([§4.5](#45-exit-code-taxonomy)) and the agent is
+never started without skills. There is no baked-in fallback.
+
+What this gives up, knowingly: runs are no longer reproducible with respect to skills, and
+a push to the Skill Pack repo changes agent behaviour in every environment with no review
+gate. The resolved commit is not recorded either (no `skills.resolved` event, no
+`skills_sha`) — skipped for now, and the cheapest first step if "what was it told?" ever
+needs answering. The pinned-ref design above is still what to build if that cost becomes
+real. `skills_ref` stays out of the Task File ([§4.1](#41-taskspec--the-input)) and there
+is no `SKILLS_REF` variable.
 
 ### 3.6 Extension seams
 
@@ -561,8 +572,10 @@ environment: `push_branch()` uses it as a one-off authenticated push URL (never 
 to `.git/config`), and `create_pull_request()` passes it as `GH_TOKEN` in the `gh`
 subprocess's environment specifically, which `gh` reads natively.
 
-`SKILLS_REPO_URL` is removed *(2026-09-03)* — v1 bakes skills into the image, so there is
-nothing to fetch. See [§3.5](#35-skills--pinned-not-latest).
+`SKILLS_REPO_URL` is still not a variable *(revised 2026-11-22, issue #10)*. Skills are now
+fetched at startup, but from a fixed repo (`nicolasances/skills-coding`, `main`) hardcoded
+in `runner/skills.py`, so there is nothing to configure. See
+[§3.5](#35-skills--pinned-not-latest).
 
 **Task File fields (in GCS, not the environment; JSON keys are camelCase — see the wire
 format note in §4.1):**
@@ -697,7 +710,7 @@ live.
 | OQ-03 | Model credential and billing at DR — direct API key or internal gateway? | See A-01. Determines whether `ANTHROPIC_BASE_URL` is optional or mandatory at DR. |
 | OQ-04 | Temporal Cloud pricing floor for personal use | See A-03. Check early — it is cheap to check and expensive to discover late. |
 | OQ-05 | Does the runner own git operations, or the agent? | **Direction reversed 2026-09-06 (issue #5): the agent.** It branches, commits, pushes and opens the PR via its skills; the runner clones and supervises (§3.1). Still open, and now *more* open than before: branch naming, commit trailers and PR body template are the model's to choose, and failure attribution — telling "could not solve it" (exit `20`) apart from "push rejected" (exit `30`, §4.5) — has no mechanism at all when both happen inside one agent turn. |
-| OQ-06 | Where does the Skill Pack live? | **Deferred 2026-09-03** — v1 bakes skills into the image, so this doesn't need answering yet. Revisit alongside §3.5 when runtime-selected skills come back. |
+| OQ-06 | Where does the Skill Pack live? | **Answered 2026-11-22 (issue #10):** `nicolasances/skills-coding`, public, fetched from `main` at every container start (§3.5). Pinning to a ref stays deferred. |
 | OQ-07 | Cloud Run Jobs maximum task timeout | **Verify against current GCP documentation rather than assuming.** Determines whether long tasks need chunking. |
 | OQ-08 | What does `/out` carry, and does it survive? | **Resolved 2026-09-03.** Nothing — `/out` is removed. `RunResult` is written to GCS (`task-output.json`, §4.3) instead, which survives the container by construction. |
 | OQ-09 | IAM for the `{GCP_PID}-agents-data` bucket — who reads/writes what? | Dispatcher: write `task.json`, read `task-output.json`. Container: read `task.json`, write `task-output.json` and `trace.json`. A least-privilege split needs specifying before this ships. |
@@ -732,9 +745,10 @@ live.
   GCS rather than reusing the one the audit requirement already justifies, and a document
   that two writers (dispatcher, container) mutate over a run's lifetime is a weaker audit
   record than an object that's written once and never touched again.
-- **Baked-in skills as the default** — kept as a documented fallback (§3.5), not the
-  primary path.
-- **Unpinned `latest` skills** — rejected outright. Non-reproducible and unreviewable.
+- **Baked-in skills** — the v1 starting point until 2026-11-22, replaced by a startup
+  fetch (§3.5, issue #10): changes to the skills repo never reached the image.
+- **Unpinned `latest` skills** — rejected on 2026-09-03, **adopted for v1 on 2026-11-22**
+  (§3.5, issue #10). Non-reproducible and unreviewed; accepted for fast iteration.
 - **Resumable sessions, warm pools, fan-out, multi-tenancy** — all deferred to §9. Each
   adds real state to a design whose main virtue is having none.
 - **Structured ~~`issue_ref`~~, `branch_name`, `skills_ref`, `harness`, `model`,
@@ -825,7 +839,7 @@ document is actionable rather than aspirational.
 | `runner/git/gitops.py` | `push_branch()` and `create_pull_request()` exist but are called from nowhere; there is no `checkout -b` anywhere in the runner. | **Intentional as of 2026-09-06** — the agent owns git (§3.1). Kept unused rather than deleted, so taking git back into the runner later doesn't mean rewriting them. |
 | `Dockerfile` | Creates `/workspace /task /out`. | `/workspace` stays. `/task` and `/out` are both removed: `/out` per OQ-08 (resolved — `RunResult` goes to GCS); `/task` was already unused and stays unused now that the Task File is resolved from GCS, not a mounted path. |
 | `Dockerfile` | Commented-out `gcloud` install. | Remove the commented CLI install — GCS access is via the `google-cloud-storage` Python client, not the `gcloud` CLI (see §8). |
-| `Dockerfile` | No `gh` CLI. | Needed for the lifecycle in §3.1. A Skill Pack fetch step is **not** needed for v1 — skills are baked into the image (§3.5). |
+| `Dockerfile` | No `gh` CLI. | Needed for the lifecycle in §3.1. The skills install is no longer a build step either: the runner fetches them at startup (§3.5, issue #10). |
 | `requirements.txt` | **Done (2026-09-03).** `google-cloud-storage` added alongside `google-cloud-secret-manager`. | — |
 
 What is already right and should not be disturbed: the non-root `agent` user, the absence

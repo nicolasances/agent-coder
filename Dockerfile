@@ -22,9 +22,8 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o 
 RUN npm install -g @anthropic-ai/claude-code
 RUN npm install -g skills
 
-# Non-root. The agent gets no more privilege than it needs. Created here,
-# ahead of the skills install below, so that install lands in the right
-# user's home — not root's.
+# Non-root. The agent gets no more privilege than it needs. The runner's
+# startup skills install runs as this user, so it lands in its home — not root's.
 RUN useradd -m -u 1001 agent \
     && mkdir -p /workspace /task /out \
     && chown -R agent:agent /workspace /task /out
@@ -32,15 +31,11 @@ RUN useradd -m -u 1001 agent \
 USER agent
 ENV HOME=/home/agent
 
-# Add coding skills, globally (--global) so they apply no matter which repo
-# gets cloned into /workspace at runtime — not scoped to whatever directory
-# the build happens to be in. Must run as `agent`, after HOME is set:
-# running this as root before HOME/USER were set both (a) wrote to root's
-# home instead of agent's, and (b) defaulted to a *project*-scoped install
-# rooted at cwd (which was `/`, since WORKDIR hadn't been set yet) — the
-# installed commands (e.g. `/implement`) were never visible to the actual
-# runtime user or its actual working directory.
-RUN npx skills add nicolasances/skills-coding --global -y
+# Skills are NOT installed here. The runner installs the latest
+# nicolasances/skills-coding at every container start (runner/skills.py), so a
+# change to the skills repo reaches the next run without an image rebuild. A
+# build-time install was also a cached layer that went stale on rebuilds.
+# Only the `skills` CLI itself is baked in, above.
 
 # A venv, not the system Python: agent owns it outright, so installing into
 # it needs no root and no --break-system-packages workaround for Debian's
