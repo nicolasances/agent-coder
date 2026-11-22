@@ -10,6 +10,41 @@
 > `RunResult` schemas, and the exit code taxonomy — this document does not redefine them,
 > only says how they get used across the boundary.
 
+> **Update 2026-11-22 (issue #8) — the runtime is now GKE, not Cloud Run Jobs.** This
+> supersedes everything below about launching the container through the Cloud Run Jobs
+> Admin API with per-execution overrides. See
+> [Runtime: KEDA ScaledJob on GKE](#runtime-keda-scaledjob-on-gke). The container
+> contract in §2 (what it reads, what it writes, the exit codes) still holds; §3 and §4,
+> the Dispatcher's launch mechanism, describe the superseded design.
+
+## Runtime: KEDA ScaledJob on GKE
+
+```
+ producer ──publish {"taskId"}──► Pub/Sub topic ──► subscription (exactly-once, DLQ)
+                                                          │ backlog
+                                                          ▼
+                                          KEDA ScaledJob "agent-coder" (agents-dev)
+                                                          │ starts a pod per message
+                                                          ▼
+                                          agent-coder pod: pull 1 → run → ack/nack
+```
+
+- KEDA scales on the subscription backlog and starts pods; it does not deliver the
+  message. The pod pulls exactly one message itself (synchronous pull, `max_messages=1`)
+  and reads the Task File named by its `taskId` from GCS.
+- Runs last up to 3 hours, longer than Pub/Sub's 600s maximum ack deadline, so the pod
+  extends its own lease every 5 minutes from a background thread.
+- The exit code decides the Pub/Sub outcome: `30` (infra failure) and SIGTERM nack, every
+  other code acks; a crash, OOM or eviction lets the lease expire and the message is
+  redelivered. The dead-letter policy caps redelivery. See
+  [concept.md §4.5](concept.md#45-exit-code-taxonomy).
+- Delivery is at-least-once, so before running the agent the pod checks for an open PR for
+  the issue and, if one exists, acks and exits `0` without running it.
+- Timeouts are layered: `TASK_TIMEOUT_SECONDS` (3h, exit `40`, ack) inside Kubernetes'
+  `activeDeadlineSeconds` (3h15m, backstop only).
+- CI builds and pushes the image, then patches the ScaledJob's image with
+  `kubectl patch` (`kubectl set image` does not work on KEDA custom resources).
+
 ## Table of Contents
 
 1. [Component overview](#1-component-overview)
