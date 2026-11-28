@@ -1,7 +1,7 @@
 import json
 
 from runner.exit_codes import EXIT_INFRA_FAILURE, EXIT_OK, EXIT_TASK_FAILED, EXIT_TIMEOUT
-from runner.main import parse_task_id, run_queued
+from runner.main import run_queued
 
 
 class FakeReceived:
@@ -35,24 +35,8 @@ class FakeQueue:
         return True
 
 
-def test_parse_task_id_reads_task_id_from_the_message_body():
-    assert parse_task_id(json.dumps({"taskId": "t-42"})) == "t-42"
-
-
-def test_parse_task_id_rejects_a_body_without_task_id():
-    try:
-        parse_task_id("{}")
-        assert False, "expected ValueError"
-    except ValueError:
-        pass
-
-
-def test_parse_task_id_rejects_non_json():
-    try:
-        parse_task_id("not json")
-        assert False, "expected ValueError"
-    except ValueError:
-        pass
+def toto_envelope(task_id: str, type: str = "taskRequested") -> str:
+    return json.dumps({"timestamp": "2026.11.28 10:00:00", "cid": "cid-1", "id": task_id, "type": type, "msg": "Task requested", "data": {"taskId": task_id}})
 
 
 def test_empty_pull_exits_zero_without_running_anything():
@@ -67,7 +51,7 @@ def test_empty_pull_exits_zero_without_running_anything():
 
 
 def test_successful_run_acks_the_message():
-    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+    queue = FakeQueue(FakeReceived(toto_envelope("t1")))
 
     code = run_queued(queue, lambda task_id: EXIT_OK)
 
@@ -76,7 +60,7 @@ def test_successful_run_acks_the_message():
 
 
 def test_the_task_id_from_the_message_is_what_gets_executed():
-    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+    queue = FakeQueue(FakeReceived(toto_envelope("t1")))
     executed = []
 
     run_queued(queue, lambda task_id: executed.append(task_id) or EXIT_OK)
@@ -85,7 +69,7 @@ def test_the_task_id_from_the_message_is_what_gets_executed():
 
 
 def test_task_failure_is_acked_so_it_is_not_retried():
-    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+    queue = FakeQueue(FakeReceived(toto_envelope("t1")))
 
     code = run_queued(queue, lambda task_id: EXIT_TASK_FAILED)
 
@@ -94,7 +78,7 @@ def test_task_failure_is_acked_so_it_is_not_retried():
 
 
 def test_timeout_is_acked():
-    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+    queue = FakeQueue(FakeReceived(toto_envelope("t1")))
 
     code = run_queued(queue, lambda task_id: EXIT_TIMEOUT)
 
@@ -103,7 +87,7 @@ def test_timeout_is_acked():
 
 
 def test_infra_failure_exit_code_is_nacked_for_retry():
-    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+    queue = FakeQueue(FakeReceived(toto_envelope("t1")))
 
     code = run_queued(queue, lambda task_id: EXIT_INFRA_FAILURE)
 
@@ -112,7 +96,7 @@ def test_infra_failure_exit_code_is_nacked_for_retry():
 
 
 def test_an_exception_while_executing_becomes_an_infra_failure_and_is_nacked():
-    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+    queue = FakeQueue(FakeReceived(toto_envelope("t1")))
 
     def explode(task_id: str) -> int:
         raise RuntimeError("clone failed")
@@ -134,6 +118,37 @@ def test_a_malformed_message_is_acked_as_task_failed_because_retrying_cannot_fix
     assert queue.acked == 1 and queue.nacked == 0
 
 
+def test_a_legacy_top_level_task_id_message_is_dropped_as_malformed():
+    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+    executed = []
+
+    code = run_queued(queue, lambda task_id: executed.append(task_id) or EXIT_OK)
+
+    assert code == EXIT_TASK_FAILED
+    assert executed == []
+    assert queue.acked == 1 and queue.nacked == 0
+
+
+def test_a_message_of_another_type_is_dropped_without_running_anything():
+    queue = FakeQueue(FakeReceived(toto_envelope("t1", type="somethingElse")))
+    executed = []
+
+    code = run_queued(queue, lambda task_id: executed.append(task_id) or EXIT_OK)
+
+    assert code == EXIT_TASK_FAILED
+    assert executed == []
+    assert queue.acked == 1 and queue.nacked == 0
+
+
+def test_the_correlation_id_of_the_message_is_logged_with_the_task_id(capsys):
+    queue = FakeQueue(FakeReceived(toto_envelope("t1")))
+
+    run_queued(queue, lambda task_id: EXIT_OK)
+
+    out = capsys.readouterr().out
+    assert "t1" in out and "cid-1" in out
+
+
 def test_local_mode_maps_an_exception_to_an_infra_failure_exit_code():
     from runner.main import run_local
 
@@ -152,7 +167,7 @@ def test_local_mode_returns_the_exit_code_of_the_run():
 def test_the_lease_is_extended_while_the_task_runs():
     import time
 
-    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+    queue = FakeQueue(FakeReceived(toto_envelope("t1")))
 
     def slow_run(task_id: str) -> int:
         time.sleep(0.2)
@@ -167,7 +182,7 @@ def test_the_lease_is_extended_while_the_task_runs():
 def test_the_lease_stops_being_extended_once_the_task_is_settled():
     import time
 
-    queue = FakeQueue(FakeReceived('{"taskId": "t1"}'))
+    queue = FakeQueue(FakeReceived(toto_envelope("t1")))
 
     run_queued(queue, lambda task_id: EXIT_OK, heartbeat_interval_seconds=0.02)
     extended_at_settle = queue.extended

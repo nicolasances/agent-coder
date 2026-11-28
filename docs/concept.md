@@ -544,7 +544,10 @@ can be re-created exactly from those three values.
 
 **(Revised 2026-11-22, issue #8 — GKE + Pub/Sub.)** `TASK_ID` is no longer the way a task
 reaches the container in production: KEDA starts the pod but does not pass it the message,
-so the pod pulls one message from Pub/Sub (body `{"taskId": "<id>"}`) and uses that id.
+so the pod pulls one message from Pub/Sub and uses its task id. **(Revised 2026-11-28, issue
+#12.)** The message is a Toto envelope as totoms publishes it (`{timestamp, cid, id, type, msg,
+data}`), of type `taskRequested`, with the id in `data.taskId`; the earlier raw body
+`{"taskId": "<id>"}` is no longer accepted.
 `TASK_ID` remains as **local mode** (US-04): if set, Pub/Sub is skipped entirely. New
 variables: `PUBSUB_PROJECT_ID` (the GKE project, not necessarily `GCP_PID`),
 `PUBSUB_SUBSCRIPTION`, and `TASK_TIMEOUT_SECONDS` (default `10800`, US-05). The paragraphs

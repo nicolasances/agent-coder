@@ -107,7 +107,9 @@ no free-form prompt field — a run is always the implementation of one specific
 Redelivery is capped by the subscription's dead-letter policy. A non-zero exit code from
 the agent CLI that is not in this table is treated as `20`: the CLI does not let us tell
 "could not solve it" from "model unreachable", and retrying a long run is the expensive
-mistake. A message that is not `{"taskId": "..."}` is acked and dropped.
+mistake. A message that is not a Toto envelope of type `taskRequested` with a `data.taskId` is acked
+and dropped (the old raw `{"taskId": "..."}` body included). The envelope's `cid` is logged
+with the task id.
 
 A duplicate is detected by looking for an open PR in the task's repo that closes the
 issue (a `Closes #N`-style keyword in the PR body, as the `/implement` flow writes it).
@@ -122,10 +124,12 @@ the dead-letter limit.
 
 ### Triggering a run
 
-Write the Task File to GCS, then publish the task id:
+Normally through `ape-tasks` (`POST /tasks`), which writes the Task File and publishes the
+message. By hand: write the Task File to GCS, then publish a Toto envelope carrying the task id:
 
 ```bash
-gcloud pubsub topics publish agent-coder-tasks-dev --message '{"taskId":"test-task-002"}'
+gcloud pubsub topics publish agentcodertasks --project <toto project> \
+  --message '{"cid":"manual","type":"taskRequested","msg":"Manual run","data":{"taskId":"test-task-002"}}'
 ```
 
 ## Running this locally
