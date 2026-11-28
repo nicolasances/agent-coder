@@ -30,14 +30,16 @@ class TaskQueue:
         self.ack_id: str | None = None
 
     @staticmethod
-    def from_env() -> "TaskQueue":
-        project_id = os.environ.get("PUBSUB_PROJECT_ID")
+    def from_env(client=None) -> "TaskQueue":
+        """The subscription lives in the toto project (GCP_PID), like every other Toto topic (issue #12)."""
+
+        project_id = os.environ.get("GCP_PID")
         subscription = os.environ.get("PUBSUB_SUBSCRIPTION")
 
         if not project_id or not subscription:
-            raise RuntimeError("PUBSUB_PROJECT_ID and PUBSUB_SUBSCRIPTION must be set when TASK_ID is not.")
+            raise RuntimeError("GCP_PID and PUBSUB_SUBSCRIPTION must be set when TASK_ID is not.")
 
-        return TaskQueue(project_id, subscription)
+        return TaskQueue(project_id, subscription, client)
 
     def pull_one(self) -> ReceivedTask | None:
         response = self.client.pull(request={"subscription": self.subscription_path, "max_messages": 1})

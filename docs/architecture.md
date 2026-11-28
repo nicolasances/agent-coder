@@ -20,7 +20,7 @@
 ## Runtime: KEDA ScaledJob on GKE
 
 ```
- producer ──publish Toto envelope──► Pub/Sub topic ──► subscription (exactly-once, DLQ)
+ producer ──publish Toto envelope──► Pub/Sub topic ──► subscription (exactly-once, no DLQ)
                                                           │ backlog
                                                           ▼
                                           KEDA ScaledJob "agent-coder" (agents-dev)
@@ -39,7 +39,8 @@
   extends its own lease every 5 minutes from a background thread.
 - The exit code decides the Pub/Sub outcome: `30` (infra failure) and SIGTERM nack, every
   other code acks; a crash, OOM or eviction lets the lease expire and the message is
-  redelivered. The dead-letter policy caps redelivery. See
+  redelivered. There is no dead-letter topic yet: redelivery is only slowed by exponential
+  backoff and bounded by the subscription's 1-day retention. See
   [concept.md §4.5](concept.md#45-exit-code-taxonomy).
 - Delivery is at-least-once, so before running the agent the pod checks for an open PR for
   the issue and, if one exists, acks and exits `0` without running it.
