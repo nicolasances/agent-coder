@@ -2,7 +2,7 @@ import pytest
 
 from runner.pubsub.task_queue import TaskQueue
 
-SUBSCRIPTION_PATH = "projects/gke-proj/subscriptions/agent-coder-tasks-dev-sub"
+SUBSCRIPTION_PATH = "projects/toto-dev/subscriptions/agentcodertasks-sub"
 
 
 class FakeMessage:
@@ -50,7 +50,7 @@ class FakeSubscriber:
 
 
 def make_queue(subscriber: FakeSubscriber) -> TaskQueue:
-    return TaskQueue("gke-proj", "agent-coder-tasks-dev-sub", client=subscriber)
+    return TaskQueue("toto-dev", "agentcodertasks-sub", client=subscriber)
 
 
 def test_pull_one_asks_for_exactly_one_message():
@@ -128,9 +128,27 @@ def test_ack_without_a_pulled_message_is_a_noop_failure():
     assert subscriber.ack_requests == []
 
 
-def test_from_env_requires_project_and_subscription(monkeypatch):
-    monkeypatch.delenv("PUBSUB_PROJECT_ID", raising=False)
+def test_from_env_reads_the_subscription_from_the_toto_project_in_gcp_pid(monkeypatch):
+    monkeypatch.setenv("GCP_PID", "toto-dev")
+    monkeypatch.setenv("PUBSUB_SUBSCRIPTION", "agentcodertasks-sub")
+    monkeypatch.setenv("PUBSUB_PROJECT_ID", "gke-project")
+
+    queue = TaskQueue.from_env(client=FakeSubscriber([]))
+
+    assert queue.subscription_path == "projects/toto-dev/subscriptions/agentcodertasks-sub"
+
+
+def test_from_env_requires_gcp_pid(monkeypatch):
+    monkeypatch.delenv("GCP_PID", raising=False)
+    monkeypatch.setenv("PUBSUB_SUBSCRIPTION", "agentcodertasks-sub")
+
+    with pytest.raises(RuntimeError):
+        TaskQueue.from_env(client=FakeSubscriber([]))
+
+
+def test_from_env_requires_the_subscription(monkeypatch):
+    monkeypatch.setenv("GCP_PID", "toto-dev")
     monkeypatch.delenv("PUBSUB_SUBSCRIPTION", raising=False)
 
     with pytest.raises(RuntimeError):
-        TaskQueue.from_env()
+        TaskQueue.from_env(client=FakeSubscriber([]))

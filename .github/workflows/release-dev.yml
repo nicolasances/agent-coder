@@ -11,7 +11,7 @@ env:
   PROJECT_ID: totoexperiments
   REGION:  europe-west1
   PACKAGE_NAME: 'agent-coder'
-  PACKAGE_VERSION: '0.1.1'
+  PACKAGE_VERSION: '0.1.2'
   # The KEDA ScaledJob (and its CPU/memory sizing) is defined in toto-terra-gke.
   # This workflow only swaps the image it runs.
   GKE_NAMESPACE: agents-dev

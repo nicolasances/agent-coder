@@ -544,10 +544,13 @@ can be re-created exactly from those three values.
 
 **(Revised 2026-11-22, issue #8 — GKE + Pub/Sub.)** `TASK_ID` is no longer the way a task
 reaches the container in production: KEDA starts the pod but does not pass it the message,
-so the pod pulls one message from Pub/Sub (body `{"taskId": "<id>"}`) and uses that id.
+so the pod pulls one message from Pub/Sub and uses its task id. **(Revised 2026-11-28, issue
+#12.)** The message is a Toto envelope as totoms publishes it (`{timestamp, cid, id, type, msg,
+data}`), of type `taskRequested`, with the id in `data.taskId`; the earlier raw body
+`{"taskId": "<id>"}` is no longer accepted.
 `TASK_ID` remains as **local mode** (US-04): if set, Pub/Sub is skipped entirely. New
-variables: `PUBSUB_PROJECT_ID` (the GKE project, not necessarily `GCP_PID`),
-`PUBSUB_SUBSCRIPTION`, and `TASK_TIMEOUT_SECONDS` (default `10800`, US-05). The paragraphs
+variables: `PUBSUB_SUBSCRIPTION` (in the `GCP_PID` project since issue #12; the earlier
+`PUBSUB_PROJECT_ID`, which pointed at the GKE project, is gone), and `TASK_TIMEOUT_SECONDS` (default `10800`, US-05). The paragraphs
 below describe the earlier Cloud Run override model.
 
 **(Revised 2026-09-03.)** Per-task fields no longer travel as individual environment
@@ -632,7 +635,7 @@ Temporal retry policy; the retry decision is the nack:
 | No change needed | `10` | ack |
 | Task failed | `20` | ack |
 | Validation failed | `21` | ack |
-| Infra failure | `30` | **nack** (retried, capped by the dead-letter limit) |
+| Infra failure | `30` | **nack** (retried with backoff until the 1-day retention expires; no dead-letter topic yet) |
 | Timeout (`TASK_TIMEOUT_SECONDS`) | `40` | ack |
 | Crash / OOM / eviction | n/a | lease expires, retried |
 | SIGTERM | `143` | nack immediately, agent stopped |

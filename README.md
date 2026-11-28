@@ -49,15 +49,17 @@ message to the pod: the pod pulls its own task, with a synchronous pull of exact
 message. If the pull is empty (KEDA started a pod but there is nothing left), the pod logs
 it and exits `0`.
 
-The message body is the task id:
+The message is a Toto envelope (the `TotoMessage` totoms publishes, e.g. from `ape-tasks`)
+carrying the task id:
 
 ```json
-{ "taskId": "test-task-002" }
+{ "timestamp": "2026.11.28 10:00:00", "cid": "…", "id": "test-task-002", "type": "taskRequested", "msg": "…", "data": { "taskId": "test-task-002" } }
 ```
 
-The task id names the Task File below. The infrastructure (topic, subscription with
-exactly-once delivery and a dead-letter topic, KEDA, IAM) lives in `toto-terra-gke` and
-`toto-terra`, not here.
+The task id names the Task File below. The topic (`agentcodertasks`) and its subscription
+(`agentcodertasks-sub`: exactly-once delivery, exponential retry backoff, 1-day retention, no
+dead-letter topic) live in the toto project (`GCP_PID`) and are defined in `toto-terra`, with
+their IAM. KEDA and the ScaledJob are in `toto-terra-gke`.
 
 Because a run can last hours and Pub/Sub's maximum ack deadline is 600s, a background
 thread extends the lease (`modify_ack_deadline(600)`) every 5 minutes until the run ends.
@@ -85,8 +87,7 @@ no free-form prompt field — a run is always the implementation of one specific
 | Variable | Required | Notes |
 |---|---|---|
 | `GCP_PID` | yes | GCP project holding the `{GCP_PID}-agents-data` bucket and the Secret Manager secrets. |
-| `PUBSUB_PROJECT_ID` | queue mode | GCP project of the Pub/Sub subscription (the GKE project; not necessarily `GCP_PID`). |
-| `PUBSUB_SUBSCRIPTION` | queue mode | Subscription to pull the task from. |
+| `PUBSUB_SUBSCRIPTION` | queue mode | Subscription to pull the task from, in the `GCP_PID` project (`agentcodertasks-sub`). |
 | `TASK_ID` | local mode | If set, Pub/Sub is skipped entirely and this task id is run. |
 | `TASK_TIMEOUT_SECONDS` | no | Internal run timeout. Default `10800` (3 hours). |
 
@@ -104,10 +105,14 @@ no free-form prompt field — a run is always the implementation of one specific
 | Crash / OOM / eviction | n/a | lease expires, redelivered |
 | SIGTERM | `143` | **nack immediately**, agent stopped |
 
-Redelivery is capped by the subscription's dead-letter policy. A non-zero exit code from
+There is no dead-letter topic yet: a nacked message is redelivered (with exponential backoff)
+until it is acked or its 1-day retention expires, and each redelivery starts a pod. A message
+that keeps failing has to be purged from the subscription by hand. A non-zero exit code from
 the agent CLI that is not in this table is treated as `20`: the CLI does not let us tell
 "could not solve it" from "model unreachable", and retrying a long run is the expensive
-mistake. A message that is not `{"taskId": "..."}` is acked and dropped.
+mistake. A message that is not a Toto envelope of type `taskRequested` with a `data.taskId` is acked
+and dropped (the old raw `{"taskId": "..."}` body included). The envelope's `cid` is logged
+with the task id.
 
 A duplicate is detected by looking for an open PR in the task's repo that closes the
 issue (a `Closes #N`-style keyword in the PR body, as the `/implement` flow writes it).
@@ -118,14 +123,16 @@ A pushed branch with no PR is ignored and the run goes ahead normally.
 There are two layers. `TASK_TIMEOUT_SECONDS` (3h) is the real bound: on expiry the agent
 is stopped, the run exits `40` and the message is acked. Kubernetes' `activeDeadlineSeconds`
 (3h15m) is only a backstop: if it fires, the lease expires and the message is retried, up to
-the dead-letter limit.
+the message's retention (1 day).
 
 ### Triggering a run
 
-Write the Task File to GCS, then publish the task id:
+Normally through `ape-tasks` (`POST /tasks`), which writes the Task File and publishes the
+message. By hand: write the Task File to GCS, then publish a Toto envelope carrying the task id:
 
 ```bash
-gcloud pubsub topics publish agent-coder-tasks-dev --message '{"taskId":"test-task-002"}'
+gcloud pubsub topics publish agentcodertasks --project <toto project> \
+  --message '{"cid":"manual","type":"taskRequested","msg":"Manual run","data":{"taskId":"test-task-002"}}'
 ```
 
 ## Running this locally

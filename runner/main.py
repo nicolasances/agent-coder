@@ -1,4 +1,3 @@
-import json
 import os
 from typing import Callable
 
@@ -9,6 +8,7 @@ from runner.git.pr_check import gh_runner, open_pr_exists_for_issue
 from runner.harness.harness import SECRET_NAME_CODING_AGENT_GH_TOKEN, HarnessInit
 from runner.lease import HEARTBEAT_INTERVAL_SECONDS, LeaseHeartbeat
 from runner.model.task import TaskSpec
+from runner.model.task_message import TaskMessage
 from runner.pubsub.task_queue import TaskQueue
 from runner.shutdown import SigtermGuard
 from runner.skills import SkillsInstallError, install_skills
@@ -45,21 +45,6 @@ def harness_init(task_id: str) -> HarnessInit:
         agent_data_bucket=agent_bucket(),
         trace_object_path=task_object_path(task_id, "trace.json"),
     )
-
-def parse_task_id(message_body: str) -> str:
-    """Read the task id out of a Pub/Sub message body: {"taskId": "<id>"}."""
-
-    try:
-        body = json.loads(message_body)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"The message body is not JSON: {e}")
-
-    task_id = body.get("taskId") if isinstance(body, dict) else None
-
-    if not task_id:
-        raise ValueError("The message body has no 'taskId'.")
-
-    return task_id
 
 def execute_task(task_id: str, guard: SigtermGuard | None = None) -> int:
     """Run one task end to end and return its exit code (docs/concept.md §4.5).
@@ -120,13 +105,18 @@ def run_queued(queue: TaskQueue, execute: Callable[[str], int], heartbeat_interv
         return EXIT_OK
 
     try:
-        task_id = parse_task_id(received.data)
+        message = TaskMessage.from_json(received.data)
     except ValueError as e:
         # Redelivering a malformed message can never fix it.
         print(f"Dropping malformed message: {e}", flush=True)
         queue.ack()
 
         return EXIT_TASK_FAILED
+
+    task_id = message.task_id
+
+    # The cid links this run to the request that queued it (e.g. in ape-tasks' logs).
+    print(f"Pulled task '{task_id}' (cid: {message.cid}).", flush=True)
 
     # A run outlives Pub/Sub's 600s ack-deadline cap, so keep the lease alive until it ends.
     heartbeat = LeaseHeartbeat(queue.extend, heartbeat_interval_seconds)

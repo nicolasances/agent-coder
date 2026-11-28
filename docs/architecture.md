@@ -20,7 +20,7 @@
 ## Runtime: KEDA ScaledJob on GKE
 
 ```
- producer ──publish {"taskId"}──► Pub/Sub topic ──► subscription (exactly-once, DLQ)
+ producer ──publish Toto envelope──► Pub/Sub topic ──► subscription (exactly-once, no DLQ)
                                                           │ backlog
                                                           ▼
                                           KEDA ScaledJob "agent-coder" (agents-dev)
@@ -31,12 +31,16 @@
 
 - KEDA scales on the subscription backlog and starts pods; it does not deliver the
   message. The pod pulls exactly one message itself (synchronous pull, `max_messages=1`)
-  and reads the Task File named by its `taskId` from GCS.
+  and reads the Task File named by its `data.taskId` from GCS. The message is a Toto
+  envelope (`{timestamp, cid, id, type, msg, data}`, as totoms publishes it) of type
+  `taskRequested`; anything else is acked and dropped. The envelope's `cid` is logged with the
+  task id, to trace a run back to the request that queued it.
 - Runs last up to 3 hours, longer than Pub/Sub's 600s maximum ack deadline, so the pod
   extends its own lease every 5 minutes from a background thread.
 - The exit code decides the Pub/Sub outcome: `30` (infra failure) and SIGTERM nack, every
   other code acks; a crash, OOM or eviction lets the lease expire and the message is
-  redelivered. The dead-letter policy caps redelivery. See
+  redelivered. There is no dead-letter topic yet: redelivery is only slowed by exponential
+  backoff and bounded by the subscription's 1-day retention. See
   [concept.md §4.5](concept.md#45-exit-code-taxonomy).
 - Delivery is at-least-once, so before running the agent the pod checks for an open PR for
   the issue and, if one exists, acks and exits `0` without running it.
